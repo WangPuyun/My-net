@@ -1,0 +1,18 @@
+# 不需要上传的临时文件或大文件
+__pycache__/
+.idea/
+nohup.out
+*.png
+*.jpg
+*.jpeg
+*.mat
+runs/
+results/
+results_sfp/
+pt/
+*.pth
+*.pt
+*.log
+*.tmp
+
+
