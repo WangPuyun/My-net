@@ -130,7 +130,7 @@ def test_dataloaders(args):
 
     # 验证集
     test_set = MyDataset(
-        csv_file='Underwater Dataset/all_list.csv',
+        csv_file='Underwater Dataset/test_list.csv',
         root_dir='Underwater Dataset/Underwater Dataset_results',
         transform=False
     )
