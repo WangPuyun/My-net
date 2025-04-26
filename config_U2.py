@@ -13,7 +13,7 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from Datasets_U2 import MyDataset, RandomCrop, FixedCrop, RandomMove, unfold_image, concat_image
 from torch.utils.data import DataLoader
-from AttentionU2Net import CAOutside
+from AttentionU2Net import U2Net_with_enhance_img
 from math import pi
 import math
 def init_distributed(local_rank, nprocs, url='tcp://localhost:25484'):
@@ -35,13 +35,13 @@ def create_model_and_optimizer(args):
     训练时调用
     创建模型和优化器，返回(model, optimizer)。
     """
-    model = CAOutside.net
+    model = U2Net_with_enhance_img.net
 
     # 将模型移动到指定设备（本地 GPU）
     # print(args.local_rank)
     model = model.cuda(args.local_rank)
 
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10, verbose=True)
 
     return model, optimizer, scheduler
@@ -237,12 +237,11 @@ def train_sfp(train_loader, model, criterion, optimizer, epoch, writer, local_ra
         cosine = 1 - criterion(outputs, ground_truths)
         num_cosine = torch.sum(torch.sum(torch.sum(cosine, dim=1), dim=1))
         M = torch.sum(torch.sum(torch.sum(mask, dim=1), dim=1))  # 物体像素
-        back_ground = (args.train_batch_size * 256 * 256) - M  # 背景像素
+        back_ground = (train_loader.batch_size * 256 * 256) - M  # 背景像素
         loss_cosine = num_cosine - back_ground
         loss = loss_cosine / M
 
         torch.distributed.barrier()  # 在所有进程运行到这一步之前，先完成此前代码的进程会等待其他进程。这使得我们能够得到准确、有序的输出。
-
 
         optimizer.zero_grad()
         loss.backward()
@@ -368,8 +367,6 @@ def val_sfp(val_loader, model, writer, epoch, local_rank, args, criterion, val_l
                     save_image(image, f'./results_sfp/{filename}.bmp')
                 m = torch.sum(torch.sum(criterion(image, ground_truth))) / M
                 mae = torch.acos(m) * 180 / pi
-
-                print(mae)
 
             batch_size = ground_truth.size(0)
             total_loss += mae * batch_size
@@ -555,6 +552,28 @@ def draw_tensor_image(tensor_img, title="Channel", denormalize=True):
     # plt.pause(0.001)  # 用于在训练过程中实时更新显示
     plt.close()
 
+def adjust_learning_rate(optimizer, epoch, args):
+    """Decay the learning rate based on schedule"""
+    lr = args.lr
+    args.warmup_epochs = 0
+    if epoch < args.warmup_epochs:
+        lr *= float(epoch) / float(max(1.0, args.warmup_epochs))
+        if epoch == 0:
+            lr = 1e-6
+    else:
+        # progress after warmup
+        if args.cos:  # cosine lr schedule
+            # lr *= 0.5 * (1. + math.cos(math.pi * epoch / args.epochs))
+            progress = float(epoch - args.warmup_epochs) / float(max(1, args.epochs - args.warmup_epochs))
+            lr *= 0.5 * (1. + math.cos(math.pi * progress))
+            # print("adjust learning rate now epoch %d, all epoch %d, progress"%(epoch, args.epochs))
+        else:  # stepwise lr schedule
+            for milestone in args.schedule:
+                lr *= 0.1 if epoch >= milestone else 1.
+    for param_group in optimizer.param_groups:  # 第一种定义方法
+        param_group['lr'] = lr
+    print("Epoch-{}, base lr {}, optimizer.param_groups[0]['lr']".format(epoch+1, args.lr),
+          optimizer.param_groups[0]['lr'])
 
 def sync_tensor(tensor):
     """在所有 GPU 之间同步张量，确保 loss 计算正确"""

@@ -37,13 +37,13 @@ class MyDataset(Dataset):
         image = torch.as_tensor(img_gt['images'], dtype=torch.float32).permute(2, 0, 1)
         enhanced_images = torch.as_tensor(img_gt['enhanced_images'], dtype=torch.float32).permute(2, 0, 1)
         CleanWater = torch.as_tensor(img_gt['CleanWater'], dtype=torch.float32).permute(2, 0, 1)
-        ground_truth = torch.as_tensor(img_gt['I_Normal_gt'], dtype=torch.uint8).permute(2, 0, 1)
+        ground_truth = torch.as_tensor(img_gt['I_Normal_gt'], dtype=torch.float32).permute(2, 0, 1)
         P = img_gt['P']
         P = P[:, :, 1:5]
         P1 = torch.as_tensor(P, dtype=torch.float32).permute(2, 0, 1)
-        mask = torch.as_tensor(img_gt['mask'], dtype=torch.int8)
+        mask = torch.as_tensor(img_gt['mask'], dtype=torch.float32)
         input = torch.cat([image, P1], dim=0)
-        input = torch.cat([enhanced_images, P1], dim=0)
+        input = torch.cat([enhanced_images, input], dim=0)
         filename = self.image_gt.iloc[idx, 0].rstrip(".mat")
         sample = { 'input': input, 'ground_truth': ground_truth, 'mask': mask, 'CleanWater': CleanWater, 'mat_path': img_gt_file_path, 'P': img_gt['P'], 'filename':filename}
 
@@ -132,7 +132,7 @@ def unfold_image(sample):
     input, ground_truth, mask, CleanWater, mat_path = sample['input'], sample['ground_truth'], sample['mask'], sample['CleanWater'], sample['mat_path']
     input, mask = input.squeeze(0), mask.squeeze(0)
     patches1 = input.unfold(1, 256, 256).unfold(2, 256, 256)
-    patches1 = patches1.reshape(8, -1, 256, 256)
+    patches1 = patches1.reshape(12, -1, 256, 256)
     patches1.transpose_(0, 1)
 
     patches2 = mask.unfold(0, 256, 256).unfold(1, 256, 256)

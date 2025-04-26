@@ -8,7 +8,7 @@ from torch.backends import cudnn
 import torch.nn as nn
 from tqdm import tqdm
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '1,2,3,4'
+os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,6,7'
 
 parser = argparse.ArgumentParser(description='PyTorch Network Training')
 parser.add_argument("--model_name", type=str, default=None, help="是否加载模型继续训练，重头开始训练 defaule=None, 继续训练defaule设置为'/**.pth'")
@@ -16,6 +16,7 @@ parser.add_argument('--lr', type=float, default=0.001, help='学习率')
 parser.add_argument("--train_batch_size", type=int, default=12, help="分布训练批次大小")
 parser.add_argument("--val_batch_size", type=int, default=4, help="分布验证批次大小")
 parser.add_argument('--event_dir', default="./runs", help='tensorboard事件文件的地址')
+parser.add_argument("cos", action='store_true', help="use cos decay learning rate")
 parser.add_argument("--epochs", type=int, default=1000)
 parser.add_argument('--warmup_epochs', type=int, default=50, help='学习率预热epoch数')
 parser.add_argument('--checkpoints_dir', default="./pt", help='模型检查点文件的路径(以继续培训)')
@@ -55,7 +56,7 @@ def main_worker(local_rank, nprocs,args):
     train_loader, val_loader, train_sampler, val_sampler = config.create_dataloaders(args)
 
     # 7.初始化cudnn与TensorBoard
-    cudnn.benchmark = False # 设置为True追求速度，会消耗大量显存；False训练速度慢，占用显存少
+    cudnn.benchmark = True # 设置为True追求速度，会消耗大量显存；False训练速度慢，占用显存少
     writer = SummaryWriter(args.event_dir)  # 创建事件文件
 
     # 8.训练与验证循环
@@ -66,13 +67,7 @@ def main_worker(local_rank, nprocs,args):
         train_sampler.set_epoch(epoch)  # 将在for循环训练时候的epoch传入,达到乱序效果
         val_sampler.set_epoch(epoch)
 
-        # # 学习率预热逻辑
-        # if epoch < args.warmup_epochs:
-        #     warmup_lr = args.lr * (epoch + 1) / args.warmup_epochs
-        #     for param_group in optimizer.param_groups:
-        #         param_group['lr'] = warmup_lr
-        # else:
-        #     scheduler.step(val_loss_list[-1])
+        # config.adjust_learning_rate(optimizer, epoch, args)
 
         model,train_loss_list = config.train_sfp(train_loader, model, criterion, optimizer, epoch, writer, args.local_rank, args, train_loss_list)
         val_loss_list = config.val_sfp(val_loader, model, writer, epoch, args.local_rank, args, criterion, val_loss_list)

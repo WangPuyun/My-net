@@ -17,7 +17,7 @@ from math import pi
 from Datasets_U2 import RandomMove, unfold_image, concat_image
 from torchvision.utils import save_image
 from AttentionU2Net import CAOutside
-os.environ['CUDA_VISIBLE_DEVICES'] = '1,4'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1,3,7'
 
 def parse_args():
     parser = argparse.ArgumentParser(description='PyTorch Network Testing')
@@ -25,7 +25,7 @@ def parse_args():
     parser.add_argument("--model_name", type=str, default=None,
                         help="加载已训练的模型文件路径，例如 'xxx.pth'")
     # 测试批次大小
-    parser.add_argument("--test_batch_size", type=int, default=2, help="测试批次大小")
+    parser.add_argument("--test_batch_size", type=int, default=3, help="测试批次大小")
     # # 测试数据所在的目录或其他参数 (视情况添加)
     # parser.add_argument("--test_data_dir", type=str, default="./test_data",
     #                     help="测试数据的路径")
@@ -69,7 +69,7 @@ def main_worker(local_rank, nprocs, args):
     test_loader, _ = config.test_dataloaders(args)
 
     # 若需要加速
-    cudnn.benchmark = False
+    # cudnn.benchmark = True
 
     # 在每张卡上循环测试 (或者仅主进程执行)
     # 此处写一个简单的测试流程，可根据需要做更详细的结果保存或指标计算
