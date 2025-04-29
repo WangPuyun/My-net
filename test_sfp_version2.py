@@ -18,6 +18,7 @@ from Datasets_U2 import RandomMove, unfold_image, concat_image
 from torchvision.utils import save_image
 from AttentionU2Net import CAOutside
 from AttentionU2Net import U2Net_with_enhance_img
+from utils_window import PATCH, OVERLAP, STRIDE, hann2d
 os.environ['CUDA_VISIBLE_DEVICES'] = '1,3,7'
 
 def parse_args():
@@ -74,49 +75,47 @@ def main_worker(local_rank, nprocs, args):
 
     # 在每张卡上循环测试 (或者仅主进程执行)
     # 此处写一个简单的测试流程，可根据需要做更详细的结果保存或指标计算
-    total_loss = 0.0
-    total_samples = 0
-    random_move = RandomMove()
-    images = torch.zeros([1, 3, 1024, 1224]).cuda(local_rank)
+    device = torch.device(f'cuda:{local_rank}')
+    window = hann2d(PATCH, device).unsqueeze(0).unsqueeze(0)
+
+    total_loss, total_samples = 0., 0
+    
     with torch.no_grad():
-        for i, sample_raw in enumerate(test_loader):
-            images.zero_()
-            mae = float('nan')
-            while math.isnan(mae):
-                for j in range(32):
-                    sample = random_move(sample_raw)
-                    distant = sample['distant']
-                    original = [-distant[0], -distant[1]]
-                    sample = unfold_image(sample)
-                    mask = sample['mask'].cuda(local_rank)
-                    inputs = sample['input']
-                    # inputs = inputs[:,0:4,:,:]
-                    inputs = inputs.cuda(local_rank, non_blocking=True)
-                    outputs, *_ = model(inputs)
-                    outputs *= mask
-                    outputs = concat_image(outputs)
-                    pad = nn.ZeroPad2d(padding=(0, 200, 0, 0))
-                    outputs = pad(outputs)
-                    outputs = affine(outputs, 0, original, 1, [0.0])
-                    images += outputs
-                images = torch.div(images, 32)
-                images = normalize(images, dim=1)
-                ground_truths = sample_raw['ground_truth']
-                # ground_truths = ground_truths[:, 0:4, :, :]
-                ground_truths = ground_truths.cuda(local_rank, non_blocking=True)
-                mask = sample_raw['mask'].cuda(local_rank, non_blocking=True)
-                mask = mask.unsqueeze(1)
-                ground_truths = ground_truths * mask
-                ground_truths = ground_truths.float() / 255.0
-                M = torch.sum(torch.sum(mask, dim=1))
-                
-                m = torch.sum(torch.sum(criterion(images, ground_truths))) / M
-                # torch.distributed.barrier()# 同步进程
-                angle = torch.acos(m)
-                mae = angle * 180 / pi
-                print(mae)
-            filename = sample_raw['filename']
-            save_image(images, './results_sfp/{}_{}.bmp'.format(filename[0], mae))
+        for i, sample in enumerate(test_loader):
+            inputs   = sample['input'].cuda(device)
+            gt       = sample['ground_truth'].float().cuda(device) / 255.
+            mask     = sample['mask'].unsqueeze(1).cuda(device)
+            gt *= mask
+
+            H, W     = inputs.shape[2:]
+            # -----------准备空容器-----------
+            out_sum = torch.zeros(1, 3, H, W, device=device)
+            w_sum   = torch.zeros(1, 1, H, W, device=device)
+
+            #  -----------滑窗推理-----------
+            for y in range(0, H - PATCH + 1, STRIDE):
+                for x in range(0, W - PATCH + 1, STRIDE):
+                    patch = inputs[..., y:y+PATCH, x:x+PATCH]
+                    pred, *_ = model(patch)
+                    pred = pred * window
+                    out_sum[..., y:y+PATCH, x:x+PATCH] += pred
+                    w_sum[...,  y:y+PATCH, x:x+PATCH] += window
+
+            # -----------归一化得到整幅结果-----------
+            full_pred = out_sum / w_sum.clamp_min(1e-6)
+            full_pred = torch.nn.functional.normalize(full_pred, dim=1)
+            full_pred *= mask
+
+            # -----------计算角度 MAE-----------
+            M  = torch.sum(mask)
+            m  = torch.sum(criterion(full_pred , gt )) / M
+            mae = torch.acos(m.clamp(-1 + 1e-6, 1 - 1e-6)) * 180 / pi
+
+            total_loss   += mae.item()
+            total_samples += 1
+
+            filename = sample['filename']
+            save_image(full_pred, './results_sfp/{}_{}.bmp'.format(filename[0], mae))
             
             
 

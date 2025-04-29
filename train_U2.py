@@ -69,8 +69,8 @@ def main_worker(local_rank, nprocs,args):
 
         # config.adjust_learning_rate(optimizer, epoch, args)
 
-        model,train_loss_list = config.train_sfp(train_loader, model, criterion, optimizer, epoch, writer, args.local_rank, args, train_loss_list)
-        val_loss_list = config.val_sfp(val_loader, model, writer, epoch, args.local_rank, args, criterion, val_loss_list)
+        model,train_loss_list = config.train(train_loader, model, criterion, optimizer, epoch, writer, args.local_rank, args, train_loss_list)
+        val_loss_list = config.val(val_loader, model, writer, epoch, args.local_rank, args, criterion, val_loss_list)
         torch.distributed.barrier()  # 等待所有进程计算完毕
         # scheduler.step(val_loss_list[-1])  # 更新学习率
         # 记录学习率（仅在主进程）

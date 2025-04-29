@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader
 from AttentionU2Net import U2Net_with_enhance_img
 from math import pi
 import math
+from utils_window import PATCH, OVERLAP, STRIDE, hann2d
 def init_distributed(local_rank, nprocs, url='tcp://localhost:25484'):
     """
     初始化分布式训练环境。
@@ -82,14 +83,14 @@ def create_dataloaders(args):
     # 训练集
     train_set = MyDataset(
         csv_file='Underwater Dataset/train_list.csv',
-        root_dir='Underwater Dataset/Underwater Dataset_results',
+        root_dir='Underwater Dataset/Underwater Dataset',
         transform=RandomCrop()  # RandomCrop 是数据增强
     )
 
     # 验证集
     val_set = MyDataset(
         csv_file='Underwater Dataset/val_list.csv',
-        root_dir='Underwater Dataset/Underwater Dataset_results',
+        root_dir='Underwater Dataset/Underwater Dataset',
         transform=False  
     )
 
@@ -131,7 +132,7 @@ def test_dataloaders(args):
     # 验证集
     test_set = MyDataset(
         csv_file='Underwater Dataset/test_list.csv',
-        root_dir='Underwater Dataset/Underwater Dataset_results',
+        root_dir='Underwater Dataset/Underwater Dataset',
         transform=False
     )
 
@@ -386,6 +387,64 @@ def val_sfp(val_loader, model, writer, epoch, local_rank, args, criterion, val_l
     val_loss_list.append(val_loss)
     return val_loss_list
 
+def val_sfp_PlanB(val_loader, model, writer, epoch, local_rank, args, criterion, val_loss_list):
+
+    model.eval()
+    device = torch.device(f'cuda:{local_rank}')
+    # H, W = 1024, 1224                       # 原图大小，若变化自行获取
+    window = hann2d(PATCH, device).unsqueeze(0).unsqueeze(0)     # (1,1,256,256)
+
+    total_loss, total_samples = 0., 0
+
+    with torch.no_grad():
+        for i, sample in enumerate(val_loader):
+
+            inputs   = sample['input'].cuda(device)              # B=1, C=3/4, H, W
+            gt       = sample['ground_truth'].float().cuda(device) / 255.
+            mask     = sample['mask'].unsqueeze(1).cuda(device)  # (1,1,H,W)
+            gt *= mask
+
+            H, W     = inputs.shape[2:]
+            # -----------准备空容器-----------
+            out_sum = torch.zeros(1, 3, H, W, device=device)
+            w_sum   = torch.zeros(1, 1, H, W, device=device)
+
+            # -----------滑窗推理-----------
+            for y in range(0, H - PATCH + 1, STRIDE):
+                for x in range(0, W - PATCH + 1, STRIDE):
+
+                    patch = inputs[..., y:y+PATCH, x:x+PATCH]     # (1,C,256,256)
+                    pred, *_ = model(patch)                      # (1,3,256,256)  ← 改成你的输出
+                    pred = pred * window                         # 加权
+                    out_sum[..., y:y+PATCH, x:x+PATCH] += pred
+                    w_sum[...,  y:y+PATCH, x:x+PATCH] += window
+
+            # -----------归一化得到整幅结果-----------
+            full_pred = out_sum / w_sum.clamp_min(1e-6)           # (1,3,H,W)
+            full_pred = torch.nn.functional.normalize(full_pred, dim=1)
+            full_pred *= mask
+
+            # -----------计算角度 MAE-----------
+            M  = torch.sum(mask)                                  # 有效像素
+            m  = torch.sum(criterion(full_pred , gt )) / M
+            mae = torch.acos(m.clamp(-1 + 1e-6, 1 - 1e-6)) * 180 / pi
+
+            total_loss   += mae.item()
+            total_samples += 1       # batch_size=1
+
+            if i % 10 == 0 and local_rank == 0:
+                save_image(full_pred, f'./results_sfp/{sample["filename"][0]}_{epoch}.bmp')
+
+    # -----------DDP 同步 + 记录-----------
+    val_mae_tensor = torch.tensor([total_loss], device=device)
+    val_samples_tensor = torch.tensor([total_samples], device=device)
+    val_mae_tensor = sync_tensor(val_mae_tensor)
+    val_samples_tensor = sync_tensor(val_samples_tensor)
+    val_mae_tensor = val_mae_tensor / val_samples_tensor
+    if local_rank == 0:
+        writer.add_scalar('validation_mae', val_mae_tensor.item(), epoch+1)
+    val_loss_list.append(val_mae_tensor.item())
+    return val_loss_list
 
 def ssim(img1, img2, window_size=11, size_average=True, val_range=1.0):
     # 确保输入在 [0, val_range] 范围内
