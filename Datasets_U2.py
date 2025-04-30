@@ -35,7 +35,7 @@ class MyDataset(Dataset):
                                         self.image_gt.iloc[idx, 0])  # os.path.join连接两个或更多的路径名组件
         img_gt = scio.loadmat(img_gt_file_path)
         image = torch.as_tensor(img_gt['images'], dtype=torch.float32).permute(2, 0, 1)
-        enhanced_images = torch.as_tensor(img_gt['enhanced_images'], dtype=torch.float32).permute(2, 0, 1)
+        # enhanced_images = torch.as_tensor(img_gt['enhanced_images'], dtype=torch.float32).permute(2, 0, 1)
         CleanWater = torch.as_tensor(img_gt['CleanWater'], dtype=torch.float32).permute(2, 0, 1)
         ground_truth = torch.as_tensor(img_gt['I_Normal_gt'], dtype=torch.float32).permute(2, 0, 1)
         P = img_gt['P']
@@ -43,7 +43,7 @@ class MyDataset(Dataset):
         P1 = torch.as_tensor(P, dtype=torch.float32).permute(2, 0, 1)
         mask = torch.as_tensor(img_gt['mask'], dtype=torch.float32)
         input = torch.cat([image, P1], dim=0)
-        input = torch.cat([enhanced_images, input], dim=0)
+        # input = torch.cat([enhanced_images, input], dim=0)
         filename = self.image_gt.iloc[idx, 0].rstrip(".mat")
         sample = { 'input': input, 'ground_truth': ground_truth, 'mask': mask, 'CleanWater': CleanWater, 'mat_path': img_gt_file_path, 'P': img_gt['P'], 'filename':filename}
 
@@ -133,6 +133,27 @@ def unfold_image(sample):
     input, mask = input.squeeze(0), mask.squeeze(0)
     patches1 = input.unfold(1, 256, 256).unfold(2, 256, 256)
     patches1 = patches1.reshape(12, -1, 256, 256)
+    patches1.transpose_(0, 1)
+
+    patches2 = mask.unfold(0, 256, 256).unfold(1, 256, 256)
+    patches2 = patches2.reshape(1, -1, 256, 256)
+    patches2.transpose_(0, 1)
+    # else:
+    #     patches1 = input.unfold(2, 256, 256).unfold(3, 256, 256)
+    #     patches1 = patches1.reshape(8,4,-1,256,256)
+    #     patches1 = patches1.permute(0, 2, 1, 3, 4)  # 交换 batch 和 patch 维度
+    #
+    #     patches2 = mask.unfold(1, 256, 256).unfold(2, 256, 256)
+    #     patches2 = patches2.reshape(8, 1, -1, 256, 256)
+    #     patches2 = patches2.permute(0, 2, 1, 3, 4)  # 交换 batch 和 patch 维度
+
+    return {'input': patches1, 'ground_truth': ground_truth, 'mask': patches2, 'CleanWater': CleanWater, 'mat_path': mat_path, 'filename':sample['filename']}
+
+def unfold_enhanced_image(sample):
+    input, ground_truth, mask, CleanWater, mat_path = sample['input'], sample['ground_truth'], sample['mask'], sample['CleanWater'], sample['mat_path']
+    input, mask = input.squeeze(0), mask.squeeze(0)
+    patches1 = input.unfold(1, 256, 256).unfold(2, 256, 256)
+    patches1 = patches1.reshape(8, -1, 256, 256)
     patches1.transpose_(0, 1)
 
     patches2 = mask.unfold(0, 256, 256).unfold(1, 256, 256)

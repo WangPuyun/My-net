@@ -15,6 +15,7 @@ import Unet
 import config_U2 as config
 from Datasets_U2 import RandomMove, unfold_image, concat_image
 import numpy as np
+from utils_window import PATCH, OVERLAP, STRIDE, hann2d
 os.environ['CUDA_VISIBLE_DEVICES'] = '1,5,7'
 
 def parse_args():
@@ -50,7 +51,7 @@ def main_worker(local_rank, nprocs, args):
     model = model.cuda(args.local_rank)
 
     # 加载指定的checkpoint
-    checkpoint = torch.load('./pt/200.pth')
+    checkpoint = torch.load('./pt/100.pth')
     model.load_state_dict(checkpoint['model'])
 
     # 同步BN、防止多卡测试时因BN计算导致结果不一致
@@ -58,7 +59,7 @@ def main_worker(local_rank, nprocs, args):
     model.eval()  # 进入测试模式
 
     # 创建损失函数（若需要在测试环节计算 loss，可保留）
-    criterion = nn.L1Loss().cuda(local_rank)
+    criterion = config.loss_function().cuda(local_rank)
 
     # 构造测试集的数据加载器
     # 可以复用与训练集/验证集类似的创建函数，也可写单独的测试数据加载逻辑
@@ -71,55 +72,52 @@ def main_worker(local_rank, nprocs, args):
 
     # 在每张卡上循环测试 (或者仅主进程执行)
     # 此处写一个简单的测试流程，可根据需要做更详细的结果保存或指标计算
-    total_loss = 0.0
-    total_samples = 0
-    random_move = RandomMove()
-    images = torch.zeros([1, 4, 1024, 1224]).cuda(local_rank)
+    device = torch.device(f'cuda:{local_rank}')
+    window = hann2d(PATCH, device).unsqueeze(0).unsqueeze(0)
+
+    total_loss, total_samples = 0.,0
     with torch.no_grad():
-        for i, sample_raw in enumerate(test_loader):
-            images.zero_()
-            for j in range(32):
-                sample = random_move(sample_raw)
-                distant = sample['distant']
-                original = [-distant[0], -distant[1]]
-                sample = unfold_image(sample)
-                mask = sample['mask'].cuda(local_rank)
-                inputs = sample['input']
-                inputs = inputs[:,0:4,:,:]
-                inputs = inputs.cuda(local_rank, non_blocking=True)
-                outputs = model(inputs)
-                _, _, h, w = outputs.size()
-                outputs *= mask
-                outputs = concat_image(outputs)
-                pad = nn.ZeroPad2d(padding=(0, 200, 0, 0))
-                outputs = pad(outputs)
-                outputs = affine(outputs, 0, original, 1, [0.0])
-                images += outputs
-            images = torch.div(images, 32)
+        for i, sample in enumerate(test_loader):
+            input = sample['input'][:,0:4,:,:].cuda(device)
+            gt = sample['CleanWater'].cuda(device)
+            mask = sample['mask'].unsqueeze(1).cuda(device)
+            gt *= mask
+            input *=mask
 
-            ground_truths = sample_raw['CleanWater']
-            ground_truths = ground_truths[:, 0:4, :, :]
-            ground_truths = ground_truths.cuda(local_rank, non_blocking=True)
-            mask = sample_raw['mask'].cuda(local_rank, non_blocking=True)
-            mask = mask.unsqueeze(1)
-            ground_truths = ground_truths * mask
+            H, W = input.shape[2:]
+            # 准备空容器
+            out_sum = torch.zeros(1, 4, H, W, device=device)
+            w_sum = torch.zeros(1, 1, H, W, device=device)
 
-            loss = criterion(images, ground_truths)
-            total_loss += loss.item() * ground_truths.size(0)
-            total_samples += ground_truths.size(0)
+            # 滑窗推理
+            for y in range(0, H - PATCH + 1, STRIDE):
+                for x in range(0, W - PATCH + 1, STRIDE):
+                    patch = input[..., y:y+PATCH, x:x+PATCH]
+                    pred = model(patch)
+                    pred = pred * window
+                    out_sum[..., y:y+PATCH, x:x+PATCH] += pred
+                    w_sum[..., y:y+PATCH, x:x+PATCH] += window
+            # 归一化得到整幅结果
+            full_pred = out_sum / w_sum.clamp_min(1e-6)
+            full_pred = torch.nn.functional.normalize(full_pred, dim=1)
+            full_pred *= mask
+            # 计算损失
+            loss = criterion(full_pred, gt).item()
+            batch_size = gt.size(0)
+            total_loss += loss * batch_size
+            total_samples += batch_size
 
             filename = os.path.splitext(os.path.basename(sample['mat_path'][0]))[0]
-            enhanced_images_save = images.squeeze().cpu().numpy().transpose(1, 2, 0).astype('float64')
-            CleanWater_save = ground_truths.squeeze().cpu().numpy().transpose(1, 2, 0).astype('float64')
-            I_Normal_gt_save = sample_raw['ground_truth'].squeeze().cpu().numpy().transpose(1, 2, 0).astype(np.uint8)
-            P_save = sample_raw['P'].squeeze().cpu().numpy().astype('float64')
-            images_save = sample_raw['input'][:,0:4,:,:].squeeze().cpu().numpy().transpose(1, 2, 0).astype('float64')
-            mask_save = sample_raw['mask'].squeeze().cpu().numpy().astype(np.bool_)
+            enhanced_images_save = full_pred.squeeze().cpu().numpy().transpose(1, 2, 0).astype('float32')
+            CleanWater_save = gt.squeeze().cpu().numpy().transpose(1, 2, 0).astype('float32')
+            I_Normal_gt_save = sample['ground_truth'].squeeze().cpu().numpy().transpose(1, 2, 0).astype(np.uint8)
+            P_save = sample['P'].squeeze().cpu().numpy().astype('float32')
+            images_save = sample['input'][:,0:4,:,:].squeeze().cpu().numpy().transpose(1, 2, 0).astype('float32')
+            mask_save = sample['mask'].squeeze().cpu().numpy().astype(np.bool_)
 
             mat_to_save = {'CleanWater': CleanWater_save, 'I_Normal_gt': I_Normal_gt_save, 'P': P_save, 'images': images_save, 'mask': mask_save, 'enhanced_images': enhanced_images_save}
             scio.savemat(f'./Underwater Dataset/Unet/{filename}.mat', mat_to_save, do_compression=True)
             print(filename)
-
 
     # 汇总结果 (若使用分布式，需要手动做reduce或gather)
     avg_loss = total_loss / (total_samples + 1e-5)

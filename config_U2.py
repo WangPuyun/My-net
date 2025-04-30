@@ -11,13 +11,13 @@ from torch import optim
 import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
-from Datasets_U2 import MyDataset, RandomCrop, FixedCrop, RandomMove, unfold_image, concat_image
+from Datasets_U2 import MyDataset, RandomCrop, FixedCrop, RandomMove, unfold_image, concat_image, unfold_enhanced_image
 from torch.utils.data import DataLoader
 from AttentionU2Net import U2Net_with_enhance_img
 from math import pi
 import math
 from utils_window import PATCH, OVERLAP, STRIDE, hann2d
-def init_distributed(local_rank, nprocs, url='tcp://localhost:25484'):
+def init_distributed(local_rank, nprocs, url='tcp://localhost:25489'):
     """
     初始化分布式训练环境。
     """
@@ -36,7 +36,7 @@ def create_model_and_optimizer(args):
     训练时调用
     创建模型和优化器，返回(model, optimizer)。
     """
-    model = U2Net_with_enhance_img.net
+    model = Unet.U_Net(4,4)
 
     # 将模型移动到指定设备（本地 GPU）
     # print(args.local_rank)
@@ -96,7 +96,7 @@ def create_dataloaders(args):
 
     # 分布式采样器
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_set, shuffle=True, drop_last=True)
-    val_sampler = torch.utils.data.distributed.DistributedSampler(val_set, shuffle=True, drop_last=True)
+    val_sampler = torch.utils.data.distributed.DistributedSampler(val_set, shuffle=False, drop_last=True)
 
     # 调整后的 batch_size（总的 batch_size / nprocs）
     train_batch_size = int(args.train_batch_size / args.nprocs)
@@ -131,7 +131,7 @@ def test_dataloaders(args):
 
     # 验证集
     test_set = MyDataset(
-        csv_file='Underwater Dataset/test_list.csv',
+        csv_file='Underwater Dataset/all_list.csv',
         root_dir='Underwater Dataset/Underwater Dataset',
         transform=False
     )
@@ -184,6 +184,8 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, local_rank, 
         mask = sample['mask']
         mask = mask.unsqueeze(1)
         mask = mask.cuda(local_rank, non_blocking=True)
+        mask = mask.expand_as(ground_truths)
+        
 
         optimizer.zero_grad()  # 清除之前的梯度
         # 前向传播
@@ -192,7 +194,7 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, local_rank, 
         outputs *= mask
         ground_truths *= mask
 
-        loss = h * w * criterion(outputs, ground_truths)
+        loss = criterion(outputs, ground_truths)
 
         # 反向传播
         loss.backward()  # 计算本批次梯度
@@ -203,8 +205,8 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, local_rank, 
         running_loss += loss.item() * batch_size
 
     # 计算所有 GPU 的 loss 总和和样本总数
-    running_loss_tensor = torch.tensor([running_loss], dtype=torch.float64, device='cuda')
-    total_samples_tensor = torch.tensor([total_samples], dtype=torch.float64, device='cuda')
+    running_loss_tensor = torch.tensor([running_loss], dtype=torch.float32, device='cuda')
+    total_samples_tensor = torch.tensor([total_samples], dtype=torch.float32, device='cuda')
 
     # 让所有 GPU 计算的 running_loss 和 total_samples 求和
     running_loss_tensor = sync_tensor(running_loss_tensor)
@@ -283,7 +285,7 @@ def val(val_loader, model, writer, epoch, local_rank, args, criterion, val_loss_
                 sample = random_move(sample_raw)
                 distant = sample['distant']
                 original = [-distant[0], -distant[1]]
-                sample = unfold_image(sample)
+                sample = unfold_enhanced_image(sample)
                 mask = sample['mask'].cuda(local_rank)
 
                 inputs = sample['input']
@@ -323,6 +325,64 @@ def val(val_loader, model, writer, epoch, local_rank, args, criterion, val_loss_
     if local_rank == 0:
         writer.add_scalar('validation_loss', val_loss, epoch + 1)
     val_loss_list.append(val_loss)
+    return val_loss_list
+
+def val_PlanB(val_loader, model, writer, epoch, local_rank, args, criterion, val_loss_list):
+    # assert val_loader.batch_size == 1# 与image的batch_size一致
+    model.eval()
+    device = torch.device(f'cuda:{local_rank}')
+    window = hann2d(PATCH,device).unsqueeze(0).unsqueeze(0)
+
+    total_loss, total_samples = 0., 0
+
+    with torch.no_grad():
+        for i, sample in enumerate(val_loader):
+            input = sample['input'][:,0:4,:,:].cuda(device)
+            gt = sample['CleanWater'].cuda(device)
+            mask = sample['mask'].unsqueeze(1).cuda(device)
+            mask = mask.expand_as(gt)
+            gt *= mask
+            input *=mask
+
+            H, W = input.shape[2:]
+            # 准备空容器
+            out_sum = torch.zeros(1, 4, H, W, device=device)
+            w_sum = torch.zeros(1, 1, H, W, device=device)
+
+            # 滑窗推理
+            for y in range(0, H - PATCH + 1, STRIDE):
+                for x in range(0, W - PATCH + 1, STRIDE):
+                    patch = input[..., y:y+PATCH, x:x+PATCH]
+                    pred = model(patch)
+                    # print('pred.max():',pred.max(),'pred.min():',pred.min(),'pred.mean();',pred.mean())
+                    pred = pred * window
+                    out_sum[..., y:y+PATCH, x:x+PATCH] += pred
+                    w_sum[..., y:y+PATCH, x:x+PATCH] += window
+            # 归一化得到整幅结果
+            full_pred = out_sum / w_sum.clamp_min(1e-6)
+            # full_pred = torch.nn.functional.normalize(full_pred, dim=1)
+            full_pred *= mask
+
+            # 计算损失
+            loss = criterion(full_pred, gt).item()
+            batch_size = gt.size(0)
+            total_loss += loss * batch_size
+            total_samples += batch_size
+
+    # 计算所有GPU的loss总和和样本总数
+    running_loss_tensor = torch.tensor([total_loss], dtype=torch.float32, device='cuda')
+    total_samples_tensor = torch.tensor([total_samples], dtype=torch.float32, device='cuda')
+
+    # 让所有 GPU 计算的 running_loss 和 total_samples 求和
+    running_loss_tensor = sync_tensor(running_loss_tensor)
+    total_samples_tensor = sync_tensor(total_samples_tensor)
+
+    val_loss = running_loss_tensor.item() / total_samples_tensor.item()
+
+    if local_rank == 0:
+        writer.add_scalar('validation_loss', val_loss, epoch + 1)
+    val_loss_list.append(val_loss)
+
     return val_loss_list
 
 def val_sfp(val_loader, model, writer, epoch, local_rank, args, criterion, val_loss_list):

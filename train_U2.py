@@ -8,12 +8,12 @@ from torch.backends import cudnn
 import torch.nn as nn
 from tqdm import tqdm
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,6,7'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1,3,4,5'
 
 parser = argparse.ArgumentParser(description='PyTorch Network Training')
 parser.add_argument("--model_name", type=str, default=None, help="是否加载模型继续训练，重头开始训练 defaule=None, 继续训练defaule设置为'/**.pth'")
 parser.add_argument('--lr', type=float, default=0.001, help='学习率')
-parser.add_argument("--train_batch_size", type=int, default=12, help="分布训练批次大小")
+parser.add_argument("--train_batch_size", type=int, default=32, help="分布训练批次大小")
 parser.add_argument("--val_batch_size", type=int, default=4, help="分布验证批次大小")
 parser.add_argument('--event_dir', default="./runs", help='tensorboard事件文件的地址')
 parser.add_argument("cos", action='store_true', help="use cos decay learning rate")
@@ -50,13 +50,14 @@ def main_worker(local_rank, nprocs,args):
     model = config.wrap_model_distributed(model, local_rank=args.local_rank)
 
     # 5.创建损失函数
-    criterion = nn.CosineSimilarity().cuda(args.local_rank)
+    criterion = config.loss_function().cuda(args.local_rank)# 图像增强
+    # criterion = nn.CosineSimilarity().cuda(args.local_rank)# 三维重建
 
     # 6.创建数据加载器
     train_loader, val_loader, train_sampler, val_sampler = config.create_dataloaders(args)
 
     # 7.初始化cudnn与TensorBoard
-    cudnn.benchmark = True # 设置为True追求速度，会消耗大量显存；False训练速度慢，占用显存少
+    cudnn.benchmark = False # 设置为True追求速度，会消耗大量显存；False训练速度慢，占用显存少
     writer = SummaryWriter(args.event_dir)  # 创建事件文件
 
     # 8.训练与验证循环
@@ -70,7 +71,7 @@ def main_worker(local_rank, nprocs,args):
         # config.adjust_learning_rate(optimizer, epoch, args)
 
         model,train_loss_list = config.train(train_loader, model, criterion, optimizer, epoch, writer, args.local_rank, args, train_loss_list)
-        val_loss_list = config.val(val_loader, model, writer, epoch, args.local_rank, args, criterion, val_loss_list)
+        val_loss_list = config.val_PlanB(val_loader, model, writer, epoch, args.local_rank, args, criterion, val_loss_list)
         torch.distributed.barrier()  # 等待所有进程计算完毕
         # scheduler.step(val_loss_list[-1])  # 更新学习率
         # 记录学习率（仅在主进程）
