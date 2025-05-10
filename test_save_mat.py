@@ -13,9 +13,9 @@ from torch.backends import cudnn
 import UPIE
 import Unet
 import config_U2 as config
-from Datasets_U2 import RandomMove, unfold_image, concat_image
 import numpy as np
-os.environ['CUDA_VISIBLE_DEVICES'] = '1,5,7'
+from Datasets_U2 import RandomMove, unfold_image, concat_image, RandomMovePad, unfold_enhanced_image, concat_enhanced_image
+os.environ['CUDA_VISIBLE_DEVICES'] = '1,4,7'
 
 def parse_args():
     parser = argparse.ArgumentParser(description='PyTorch Network Testing')
@@ -50,7 +50,7 @@ def main_worker(local_rank, nprocs, args):
     model = model.cuda(args.local_rank)
 
     # 加载指定的checkpoint
-    checkpoint = torch.load('./pt/200.pth')
+    checkpoint = torch.load('./pt/Unet_增大画布/400.pth')
     model.load_state_dict(checkpoint['model'])
 
     # 同步BN、防止多卡测试时因BN计算导致结果不一致
@@ -73,7 +73,7 @@ def main_worker(local_rank, nprocs, args):
     # 此处写一个简单的测试流程，可根据需要做更详细的结果保存或指标计算
     total_loss = 0.0
     total_samples = 0
-    random_move = RandomMove()
+    random_move = RandomMovePad()
     images = torch.zeros([1, 4, 1024, 1224]).cuda(local_rank)
     with torch.no_grad():
         for i, sample_raw in enumerate(test_loader):
@@ -82,18 +82,18 @@ def main_worker(local_rank, nprocs, args):
                 sample = random_move(sample_raw)
                 distant = sample['distant']
                 original = [-distant[0], -distant[1]]
-                sample = unfold_image(sample)
+                sample = unfold_enhanced_image(sample)
                 mask = sample['mask'].cuda(local_rank)
                 inputs = sample['input']
                 inputs = inputs[:,0:4,:,:]
                 inputs = inputs.cuda(local_rank, non_blocking=True)
                 outputs = model(inputs)
                 _, _, h, w = outputs.size()
-                outputs *= mask
-                outputs = concat_image(outputs)
-                pad = nn.ZeroPad2d(padding=(0, 200, 0, 0))
-                outputs = pad(outputs)
+                # outputs *= mask
+                outputs = concat_enhanced_image(outputs)
+       
                 outputs = affine(outputs, 0, original, 1, [0.0])
+                outputs = outputs[..., 128:128+1024,28:28+1224]
                 images += outputs
             images = torch.div(images, 32)
 
@@ -103,17 +103,17 @@ def main_worker(local_rank, nprocs, args):
             mask = sample_raw['mask'].cuda(local_rank, non_blocking=True)
             mask = mask.unsqueeze(1)
             ground_truths = ground_truths * mask
-
+            images = images * mask
             loss = criterion(images, ground_truths)
             total_loss += loss.item() * ground_truths.size(0)
             total_samples += ground_truths.size(0)
 
             filename = os.path.splitext(os.path.basename(sample['mat_path'][0]))[0]
-            enhanced_images_save = images.squeeze().cpu().numpy().transpose(1, 2, 0).astype('float64')
-            CleanWater_save = ground_truths.squeeze().cpu().numpy().transpose(1, 2, 0).astype('float64')
+            enhanced_images_save = images.squeeze().cpu().numpy().transpose(1, 2, 0).astype('float32')
+            CleanWater_save = ground_truths.squeeze().cpu().numpy().transpose(1, 2, 0).astype('float32')
             I_Normal_gt_save = sample_raw['ground_truth'].squeeze().cpu().numpy().transpose(1, 2, 0).astype(np.uint8)
-            P_save = sample_raw['P'].squeeze().cpu().numpy().astype('float64')
-            images_save = sample_raw['input'][:,0:4,:,:].squeeze().cpu().numpy().transpose(1, 2, 0).astype('float64')
+            P_save = sample_raw['P'].squeeze().cpu().numpy().astype('float32')
+            images_save = sample_raw['input'][:,0:4,:,:].squeeze().cpu().numpy().transpose(1, 2, 0).astype('float32')
             mask_save = sample_raw['mask'].squeeze().cpu().numpy().astype(np.bool_)
 
             mat_to_save = {'CleanWater': CleanWater_save, 'I_Normal_gt': I_Normal_gt_save, 'P': P_save, 'images': images_save, 'mask': mask_save, 'enhanced_images': enhanced_images_save}

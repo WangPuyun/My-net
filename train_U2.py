@@ -2,18 +2,19 @@ import argparse
 import os
 import torch.multiprocessing as mp
 import config_U2 as config
+import pandas as pd
 import torch
 from torch.utils.tensorboard import SummaryWriter
 from torch.backends import cudnn
 import torch.nn as nn
 from tqdm import tqdm
-
-os.environ['CUDA_VISIBLE_DEVICES'] = '1,3,4,5'
+import glob
+os.environ['CUDA_VISIBLE_DEVICES'] = '3,4,5,6'
 
 parser = argparse.ArgumentParser(description='PyTorch Network Training')
 parser.add_argument("--model_name", type=str, default=None, help="是否加载模型继续训练，重头开始训练 defaule=None, 继续训练defaule设置为'/**.pth'")
 parser.add_argument('--lr', type=float, default=0.001, help='学习率')
-parser.add_argument("--train_batch_size", type=int, default=32, help="分布训练批次大小")
+parser.add_argument("--train_batch_size", type=int, default=24, help="分布训练批次大小")
 parser.add_argument("--val_batch_size", type=int, default=4, help="分布验证批次大小")
 parser.add_argument('--event_dir', default="./runs", help='tensorboard事件文件的地址')
 parser.add_argument("cos", action='store_true', help="use cos decay learning rate")
@@ -25,6 +26,7 @@ args = parser.parse_args()
 train_loss_list = []  # 只在主进程维护一个 loss_list
 val_loss_list = []
 lr_list = []
+min_val_loss = 1000
 
 def main():
     args.nprocs = torch.cuda.device_count()
@@ -32,7 +34,7 @@ def main():
     mp.spawn(main_worker, nprocs=args.nprocs, args=(args.nprocs, args))  # 单机多卡
 
 def main_worker(local_rank, nprocs,args):
-    global train_loss_list, val_loss_list, lr_list
+    global train_loss_list, val_loss_list, lr_list, min_val_loss
     # 1.初始化分布式训练环境
     args.local_rank = local_rank
     config.init_distributed(local_rank=args.local_rank, nprocs=args.nprocs)
@@ -71,7 +73,7 @@ def main_worker(local_rank, nprocs,args):
         # config.adjust_learning_rate(optimizer, epoch, args)
 
         model,train_loss_list = config.train(train_loader, model, criterion, optimizer, epoch, writer, args.local_rank, args, train_loss_list)
-        val_loss_list = config.val_PlanB(val_loader, model, writer, epoch, args.local_rank, args, criterion, val_loss_list)
+        val_loss_list = config.val(val_loader, model, writer, epoch, args.local_rank, args, criterion, val_loss_list)
         torch.distributed.barrier()  # 等待所有进程计算完毕
         # scheduler.step(val_loss_list[-1])  # 更新学习率
         # 记录学习率（仅在主进程）
@@ -79,14 +81,62 @@ def main_worker(local_rank, nprocs,args):
             current_lr = optimizer.param_groups[0]['lr']
             print(f'current_lr:{current_lr}')
             lr_list.append(current_lr)
+            if val_loss_list[-1] < min_val_loss:
+                min_val_loss = val_loss_list[-1]
+                best_model_path = './pt/Unet_best'
+                # 找到所有 .pth 文件
+                pth_files = glob.glob(os.path.join(best_model_path, '*.pth'))
+                # 删除文件
+                for file_path in pth_files:
+                    try:
+                        os.remove(file_path)
+                        print(f"Deleted: {file_path}")
+                    except Exception as e:
+                        print(f"Failed to delete {file_path}: {e}")
+                config.save_checkpoint(model, optimizer,epoch+1, checkpoints_dir=best_model_path)
 
         # 在进度条中显示最新的loss
         epoch_iter.set_postfix(train_loss=train_loss_list[-1], val_loss=val_loss_list[-1])
+        
     # 9.周期性保存模型
         if (epoch + 1) % 100 == 0 and args.local_rank == 0:
+
+            # 创建一个字典结构
+            data = {
+                'epoch': list(range(1, len(train_loss_list) + 1)),
+                'train_loss': train_loss_list,
+                'val_loss': val_loss_list,
+                'lr': lr_list
+            }
+
+            # 转换为 DataFrame
+            df = pd.DataFrame(data)
+
+            # 保存为 CSV 文件
+            df.to_csv(f'training_log_{epoch+1}.csv', index=False)
+
+            config.draw_curve(train_loss_list, 'train loss_temp')
+            config.draw_curve(val_loss_list, 'val loss_temp')
+            config.draw_curve(lr_list, 'learning rate_temp')
+            config.draw_two_curve(train_loss_list, val_loss_list, 'train loss', 'val loss')
+
             config.save_checkpoint(model, optimizer,epoch+1, checkpoints_dir=args.checkpoints_dir)
+        torch.distributed.barrier()  # 等待所有进程计算完毕
 
     if args.local_rank == 0:
+        # 创建一个字典结构
+        data = {
+            'epoch': list(range(1, len(train_loss_list) + 1)),
+            'train_loss': train_loss_list,
+            'val_loss': val_loss_list,
+            'lr': lr_list
+        }
+
+        # 转换为 DataFrame
+        df = pd.DataFrame(data)
+
+        # 保存为 CSV 文件
+        df.to_csv('training_log.csv', index=False)
         writer.close()
         config.draw_curve(train_loss_list, 'train loss')
         config.draw_curve(val_loss_list, 'val loss')

@@ -11,13 +11,13 @@ from torch import optim
 import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
-from Datasets_U2 import MyDataset, RandomCrop, FixedCrop, RandomMove, unfold_image, concat_image, unfold_enhanced_image
+from Datasets_U2 import MyDataset, RandomCrop, FixedCrop, RandomMove, unfold_image, concat_image, unfold_enhanced_image, RandomMovePad, concat_enhanced_image
 from torch.utils.data import DataLoader
 from AttentionU2Net import U2Net_with_enhance_img
 from math import pi
 import math
 from utils_window import PATCH, OVERLAP, STRIDE, hann2d
-def init_distributed(local_rank, nprocs, url='tcp://localhost:25489'):
+def init_distributed(local_rank, nprocs, url='tcp://localhost:25484'):
     """
     初始化分布式训练环境。
     """
@@ -82,14 +82,14 @@ def create_dataloaders(args):
     """
     # 训练集
     train_set = MyDataset(
-        csv_file='Underwater Dataset/train_list.csv',
+        csv_file='Underwater Dataset/train_list_withoutcleanwater.csv',
         root_dir='Underwater Dataset/Underwater Dataset',
         transform=RandomCrop()  # RandomCrop 是数据增强
     )
 
     # 验证集
     val_set = MyDataset(
-        csv_file='Underwater Dataset/val_list.csv',
+        csv_file='Underwater Dataset/val_list_withoutcleanwater.csv',
         root_dir='Underwater Dataset/Underwater Dataset',
         transform=False  
     )
@@ -106,7 +106,7 @@ def create_dataloaders(args):
     train_loader = DataLoader(
         train_set,
         batch_size=train_batch_size,
-        num_workers=train_batch_size,
+        num_workers=4,
         pin_memory=True,
         sampler=train_sampler,
         drop_last=True
@@ -115,7 +115,7 @@ def create_dataloaders(args):
     val_loader = DataLoader(
         val_set,
         batch_size=val_batch_size,
-        num_workers=train_batch_size,
+        num_workers=4,
         pin_memory=True,
         sampler=val_sampler,
         drop_last=True
@@ -131,7 +131,7 @@ def test_dataloaders(args):
 
     # 验证集
     test_set = MyDataset(
-        csv_file='Underwater Dataset/all_list.csv',
+        csv_file='Underwater Dataset/test_list_withoutcleanwater.csv',
         root_dir='Underwater Dataset/Underwater Dataset',
         transform=False
     )
@@ -146,7 +146,7 @@ def test_dataloaders(args):
     test_loader = DataLoader(
         test_set,
         batch_size=test_batch_size,
-        num_workers=8,
+        num_workers=4,
         pin_memory=True,
         sampler=test_sampler,
         drop_last=True
@@ -276,7 +276,9 @@ def val(val_loader, model, writer, epoch, local_rank, args, criterion, val_loss_
     model.eval()
     total_loss = 0
     total_samples = 0
-    random_move = RandomMove()
+    epoch_nonzero = 0
+    epoch_total   = 0
+    random_move = RandomMovePad()
     image = torch.zeros([ 1, 4, 1024, 1224]).cuda(local_rank)
     with torch.no_grad():
         for i, sample_raw in enumerate(val_loader):
@@ -292,13 +294,11 @@ def val(val_loader, model, writer, epoch, local_rank, args, criterion, val_loss_
                 inputs = inputs[:,0:4,:,:]
                 inputs = inputs.cuda(local_rank, non_blocking=True)
                 outputs = model(inputs)
-                _, _, h, w = outputs.size()
-                outputs *= mask
-                outputs = concat_image(outputs)
-                pad = nn.ZeroPad2d(padding=(0, 200, 0, 0))
-                outputs = pad(outputs)
+                # outputs *= mask
+                outputs = concat_enhanced_image(outputs)
                 outputs = affine(outputs, 0, original, 1, [0.0])
-                # draw_tensor_image(outputs, denormalize=False)
+                outputs = outputs[..., 128:128+1024,28:28+1224]
+
                 image += outputs
             image = torch.div(image, 32)
             # draw_tensor_image(image, denormalize=False)
@@ -308,13 +308,16 @@ def val(val_loader, model, writer, epoch, local_rank, args, criterion, val_loss_
             mask = sample_raw['mask'].cuda(local_rank, non_blocking=True)
             mask = mask.unsqueeze(1)
             ground_truths = ground_truths * mask
-            batch_loss = h * w * criterion(image, ground_truths).item()
+            image = image * mask
+
+            batch_loss = criterion(image, ground_truths).item()
+            # print('batch_loss:', batch_loss)
             batch_size = ground_truths.size(0)  # 获取 batch_size
             total_loss += batch_loss * batch_size
             total_samples += batch_size
     # 计算所有 GPU 的 loss 总和和样本总数
-    running_loss_tensor = torch.tensor([total_loss], dtype=torch.float64, device='cuda')
-    total_samples_tensor = torch.tensor([total_samples], dtype=torch.float64, device='cuda')
+    running_loss_tensor = torch.tensor([total_loss], dtype=torch.float32, device='cuda')
+    total_samples_tensor = torch.tensor([total_samples], dtype=torch.float32, device='cuda')
 
     # 让所有 GPU 计算的 running_loss 和 total_samples 求和
     running_loss_tensor = sync_tensor(running_loss_tensor)
@@ -342,7 +345,6 @@ def val_PlanB(val_loader, model, writer, epoch, local_rank, args, criterion, val
             mask = sample['mask'].unsqueeze(1).cuda(device)
             mask = mask.expand_as(gt)
             gt *= mask
-            input *=mask
 
             H, W = input.shape[2:]
             # 准备空容器
@@ -354,17 +356,17 @@ def val_PlanB(val_loader, model, writer, epoch, local_rank, args, criterion, val
                 for x in range(0, W - PATCH + 1, STRIDE):
                     patch = input[..., y:y+PATCH, x:x+PATCH]
                     pred = model(patch)
-                    # print('pred.max():',pred.max(),'pred.min():',pred.min(),'pred.mean();',pred.mean())
                     pred = pred * window
                     out_sum[..., y:y+PATCH, x:x+PATCH] += pred
                     w_sum[..., y:y+PATCH, x:x+PATCH] += window
             # 归一化得到整幅结果
-            full_pred = out_sum / w_sum.clamp_min(1e-6)
+            full_pred = out_sum / w_sum.clamp_min_(1e-3)
             # full_pred = torch.nn.functional.normalize(full_pred, dim=1)
             full_pred *= mask
-
+            
             # 计算损失
             loss = criterion(full_pred, gt).item()
+            # print('loss:',loss)
             batch_size = gt.size(0)
             total_loss += loss * batch_size
             total_samples += batch_size
@@ -593,7 +595,7 @@ class loss_function(nn.Module):
         # 计算TV损失
         Ltv_val = total_variation_loss(output)
 
-        total_loss = 1 * L1 + 1 * Lssim_val + 1 * Ltv_val
+        total_loss = 10 * L1 + 1 * Lssim_val + 10 * Ltv_val
         # print(f"L1: {L1.item()}, Lssim: {Lssim_val.item()}, Ltv: {Ltv_val.item()}")
         return total_loss
 

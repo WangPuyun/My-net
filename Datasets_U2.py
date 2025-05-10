@@ -9,7 +9,7 @@ import random
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset
 import warnings
-
+import torchvision.transforms.functional as F
 warnings.filterwarnings("ignore")
 
 plt.ion()  # interactive mode
@@ -106,6 +106,46 @@ class RandomCrop(object):
 
         return {'input': input, 'ground_truth': ground_truth, 'mask': mask_temp, 'CleanWater': CleanWater, 'mat_path': mat_path, 'filename':sample['filename']}
 
+class RandomMovePad(object):
+    """随机平移（含对称 Padding 以防像素丢失）"""
+    def __init__(self, max_translate=128, pad_mode='reflect'):
+        self.max_t = max_translate
+        self.pad_mode = pad_mode
+
+    def _pad(self, tensor):
+        # (左, 右, 上, 下) 统一补 self.max_t
+        return F.pad(tensor, (self.max_t-100, self.max_t, self.max_t-100, self.max_t),
+                     padding_mode=self.pad_mode)
+
+    def __call__(self, sample):
+        # -------- 克隆源数据，保证不污染 sample_raw ----------
+        img_src   = sample['input']
+        gt_src    = sample['ground_truth']
+        mask_src  = sample['mask']
+        clean_src = sample['CleanWater']
+
+        # *clone* 保证后续 in-place 操作不影响原张量
+        img   = self._pad(img_src.clone())
+        gt    = self._pad(gt_src.clone())
+        mask  = self._pad(mask_src.clone())
+        clean = self._pad(clean_src.clone())
+
+        # 随机平移
+        tx = random.randint(-self.max_t, self.max_t)
+        ty = random.randint(-self.max_t+100, self.max_t-100)
+        translate = [tx, ty]
+
+        seed = torch.random.seed()       # 保证四路一致
+        for t in (img, gt, mask, clean):
+            torch.random.manual_seed(seed)
+            t[:] = F.affine(t, angle=0, translate=translate,
+                            scale=1.0, shear=[0.0])
+
+        sample = {'input':img, 'ground_truth':gt, 'mask':mask, 'CleanWater':clean,
+                       'mat_path': sample['mat_path'], 'distant':translate, 'filename':sample['filename']}
+        return sample
+
+
 class RandomMove(object):# 我发现师兄用的RandomMove和TranLate是一样的
     def __call__(self, sample, target_size=(1024, 1216)):
         input, ground_truth, mask, CleanWater, mat_path = sample['input'], sample['ground_truth'], sample['mask'], sample['CleanWater'], sample['mat_path']
@@ -191,3 +231,37 @@ def concat_image(outputs):
     image1 = torch.cat((image1, image3), dim=1)
     image1 = torch.cat((image1, image4), dim=1)
     return image1.unsqueeze(0)
+
+def concat_enhanced_image(outputs):
+    image1 = torch.cat((outputs[0], outputs[1]), dim=2)
+    image1 = torch.cat((image1, outputs[2]), dim=2)
+    image1 = torch.cat((image1, outputs[3]), dim=2)
+    image1 = torch.cat((image1, outputs[4]), dim=2)
+
+    image2 = torch.cat((outputs[5], outputs[6]), dim=2)
+    image2 = torch.cat((image2, outputs[7]), dim=2)
+    image2 = torch.cat((image2, outputs[8]), dim=2)
+    image2 = torch.cat((image2, outputs[9]), dim=2)
+
+    image3 = torch.cat((outputs[10], outputs[11]), dim=2)
+    image3 = torch.cat((image3, outputs[12]), dim=2)
+    image3 = torch.cat((image3, outputs[13]), dim=2)
+    image3 = torch.cat((image3, outputs[14]), dim=2)
+
+    image4 = torch.cat((outputs[15], outputs[16]), dim=2)
+    image4 = torch.cat((image4, outputs[17]), dim=2)
+    image4 = torch.cat((image4, outputs[18]), dim=2)
+    image4 = torch.cat((image4, outputs[19]), dim=2)
+
+    image5 = torch.cat((outputs[20], outputs[21]), dim=2)
+    image5 = torch.cat((image5, outputs[22]), dim=2)
+    image5 = torch.cat((image5, outputs[23]), dim=2)
+    image5 = torch.cat((image5, outputs[24]), dim=2)
+
+    image1 = torch.cat((image1, image2), dim=1)
+    image1 = torch.cat((image1, image3), dim=1)
+    image1 = torch.cat((image1, image4), dim=1)
+    image1 = torch.cat((image1, image5), dim=1)
+
+    image = image1.unsqueeze(0)
+    return image
