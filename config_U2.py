@@ -36,7 +36,7 @@ def create_model_and_optimizer(args):
     训练时调用
     创建模型和优化器，返回(model, optimizer)。
     """
-    model = Unet.U_Net(4,4)
+    model = U2Net_with_enhance_img.net
 
     # 将模型移动到指定设备（本地 GPU）
     # print(args.local_rank)
@@ -83,14 +83,14 @@ def create_dataloaders(args):
     # 训练集
     train_set = MyDataset(
         csv_file='Underwater Dataset/train_list_withoutcleanwater.csv',
-        root_dir='Underwater Dataset/Underwater Dataset',
+        root_dir='Underwater Dataset/Unet',
         transform=RandomCrop()  # RandomCrop 是数据增强
     )
 
     # 验证集
     val_set = MyDataset(
         csv_file='Underwater Dataset/val_list_withoutcleanwater.csv',
-        root_dir='Underwater Dataset/Underwater Dataset',
+        root_dir='Underwater Dataset/Unet',
         transform=False  
     )
 
@@ -106,7 +106,7 @@ def create_dataloaders(args):
     train_loader = DataLoader(
         train_set,
         batch_size=train_batch_size,
-        num_workers=4,
+        num_workers=6,
         pin_memory=True,
         sampler=train_sampler,
         drop_last=True
@@ -115,7 +115,7 @@ def create_dataloaders(args):
     val_loader = DataLoader(
         val_set,
         batch_size=val_batch_size,
-        num_workers=4,
+        num_workers=6,
         pin_memory=True,
         sampler=val_sampler,
         drop_last=True
@@ -132,7 +132,7 @@ def test_dataloaders(args):
     # 验证集
     test_set = MyDataset(
         csv_file='Underwater Dataset/test_list_withoutcleanwater.csv',
-        root_dir='Underwater Dataset/Underwater Dataset',
+        root_dir='Underwater Dataset/Unet',
         transform=False
     )
 
@@ -146,7 +146,7 @@ def test_dataloaders(args):
     test_loader = DataLoader(
         test_set,
         batch_size=test_batch_size,
-        num_workers=4,
+        num_workers=8,
         pin_memory=True,
         sampler=test_sampler,
         drop_last=True
@@ -391,7 +391,7 @@ def val_sfp(val_loader, model, writer, epoch, local_rank, args, criterion, val_l
     model.eval()
     total_loss = 0
     total_samples = 0
-    random_move = RandomMove()
+    random_move = RandomMovePad()
     image = torch.zeros([ 1, 3, 1024, 1224]).cuda(local_rank)
     with torch.no_grad():
         for i, sample_raw in enumerate(val_loader):
@@ -408,14 +408,12 @@ def val_sfp(val_loader, model, writer, epoch, local_rank, args, criterion, val_l
                     mask = sample1['mask'].cuda(local_rank)
                     outputs, _, _, _, _, _, _, = model(inputs)
                     outputs = outputs * mask
-                    out_put = concat_image(outputs)
-                    pad = nn.ZeroPad2d(padding=(0, 200, 0, 0))
-                    output_original = pad(out_put)
-                    angle = 0
-                    scale = 1
-                    shear = [0.0]
-                    output_original = affine(output_original, angle, original, scale, shear)
-                    image = image + output_original
+                    outputs = concat_enhanced_image(outputs)
+                    # print('1:outputs.shape:', outputs.shape)
+                    outputs = affine(outputs, 0, original, 1, [0.0])
+                    outputs = outputs[..., 128:128+1024,28:28+1224]
+                    # print('2:outputs.shape:', outputs.shape)
+                    image = image + outputs
                 ground_truth = sample_raw['ground_truth'].cuda(local_rank)
                 # ground_truth 原始是 uint8，转为 float 并归一化
                 ground_truth = ground_truth.float() / 255.0
@@ -430,6 +428,7 @@ def val_sfp(val_loader, model, writer, epoch, local_rank, args, criterion, val_l
                     save_image(image, f'./results_sfp/{filename}.bmp')
                 m = torch.sum(torch.sum(criterion(image, ground_truth))) / M
                 mae = torch.acos(m) * 180 / pi
+                # print('mae:', mae)
 
             batch_size = ground_truth.size(0)
             total_loss += mae * batch_size

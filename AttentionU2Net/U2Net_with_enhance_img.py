@@ -330,7 +330,7 @@ class FinalLayer(nn.Module):
 ##### U^2-Net ####
 class AttentionU2NetOutside(nn.Module):
 
-    def __init__(self, in_ch=12, out_ch=3):
+    def __init__(self, in_ch=8, out_ch=3):
         super(AttentionU2NetOutside, self).__init__()
 
         self.stage1 = RSU7(in_ch, 32, 64)

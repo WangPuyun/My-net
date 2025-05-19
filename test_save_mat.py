@@ -15,7 +15,7 @@ import Unet
 import config_U2 as config
 import numpy as np
 from Datasets_U2 import RandomMove, unfold_image, concat_image, RandomMovePad, unfold_enhanced_image, concat_enhanced_image
-os.environ['CUDA_VISIBLE_DEVICES'] = '1,4,7'
+os.environ['CUDA_VISIBLE_DEVICES'] = '4,5,6'
 
 def parse_args():
     parser = argparse.ArgumentParser(description='PyTorch Network Testing')
@@ -50,7 +50,7 @@ def main_worker(local_rank, nprocs, args):
     model = model.cuda(args.local_rank)
 
     # 加载指定的checkpoint
-    checkpoint = torch.load('./pt/Unet_增大画布/400.pth')
+    checkpoint = torch.load('./pt/Unet_best/646.pth')
     model.load_state_dict(checkpoint['model'])
 
     # 同步BN、防止多卡测试时因BN计算导致结果不一致

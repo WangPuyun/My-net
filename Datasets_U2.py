@@ -172,7 +172,7 @@ def unfold_image(sample):
     input, ground_truth, mask, CleanWater, mat_path = sample['input'], sample['ground_truth'], sample['mask'], sample['CleanWater'], sample['mat_path']
     input, mask = input.squeeze(0), mask.squeeze(0)
     patches1 = input.unfold(1, 256, 256).unfold(2, 256, 256)
-    patches1 = patches1.reshape(12, -1, 256, 256)
+    patches1 = patches1.reshape(8, -1, 256, 256)
     patches1.transpose_(0, 1)
 
     patches2 = mask.unfold(0, 256, 256).unfold(1, 256, 256)
