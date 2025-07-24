@@ -13,7 +13,8 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from Datasets_U2 import MyDataset, RandomCrop, FixedCrop, RandomMove, unfold_image, concat_image, unfold_enhanced_image, RandomMovePad, concat_enhanced_image
 from torch.utils.data import DataLoader
-from AttentionU2Net import U2Net_with_enhance_img
+from AttentionU2Net import U2Net
+from DeepSfP_Net import DeepSfP
 from math import pi
 import math
 from utils_window import PATCH, OVERLAP, STRIDE, hann2d
@@ -36,7 +37,7 @@ def create_model_and_optimizer(args):
     训练时调用
     创建模型和优化器，返回(model, optimizer)。
     """
-    model = U2Net_with_enhance_img.net
+    model = DeepSfP.Network()
 
     # 将模型移动到指定设备（本地 GPU）
     # print(args.local_rank)
@@ -83,14 +84,14 @@ def create_dataloaders(args):
     # 训练集
     train_set = MyDataset(
         csv_file='Underwater Dataset/train_list_withoutcleanwater.csv',
-        root_dir='Underwater Dataset/Unet',
+        root_dir='Underwater Dataset/version3_with_diff_specu',
         transform=RandomCrop()  # RandomCrop 是数据增强
     )
 
     # 验证集
     val_set = MyDataset(
         csv_file='Underwater Dataset/val_list_withoutcleanwater.csv',
-        root_dir='Underwater Dataset/Unet',
+        root_dir='Underwater Dataset/version3_with_diff_specu',
         transform=False  
     )
 
@@ -106,7 +107,7 @@ def create_dataloaders(args):
     train_loader = DataLoader(
         train_set,
         batch_size=train_batch_size,
-        num_workers=6,
+        num_workers=4,
         pin_memory=True,
         sampler=train_sampler,
         drop_last=True
@@ -115,7 +116,7 @@ def create_dataloaders(args):
     val_loader = DataLoader(
         val_set,
         batch_size=val_batch_size,
-        num_workers=6,
+        num_workers=4,
         pin_memory=True,
         sampler=val_sampler,
         drop_last=True
@@ -132,7 +133,7 @@ def test_dataloaders(args):
     # 验证集
     test_set = MyDataset(
         csv_file='Underwater Dataset/test_list_withoutcleanwater.csv',
-        root_dir='Underwater Dataset/Unet',
+        root_dir='Underwater Dataset/version3_with_diff_specu',
         transform=False
     )
 
@@ -223,6 +224,9 @@ def train_sfp(train_loader, model, criterion, optimizer, epoch, writer, local_ra
     running_loss = 0
     total_samples = 0
     for i, sample in enumerate(train_loader):
+        images = sample['image']
+        images.requires_grad_(True)
+        images = images.cuda(local_rank, non_blocking=True)
         ground_truths = sample['ground_truth']
         ground_truths = ground_truths.cuda(local_rank, non_blocking=True)
         mask = sample['mask']
@@ -232,7 +236,7 @@ def train_sfp(train_loader, model, criterion, optimizer, epoch, writer, local_ra
         inputs.requires_grad_(True)
         inputs = inputs.cuda(local_rank, non_blocking=True)
 
-        outputs, _, _, _, _, _, _, = model(inputs)
+        outputs = model(inputs,images)
         outputs = outputs * mask1
         outputs = normalize(outputs, dim=1)
         ground_truths = ground_truths * mask1
@@ -295,7 +299,7 @@ def val(val_loader, model, writer, epoch, local_rank, args, criterion, val_loss_
                 inputs = inputs.cuda(local_rank, non_blocking=True)
                 outputs = model(inputs)
                 # outputs *= mask
-                outputs = concat_enhanced_image(outputs)
+                outputs = concat_image(outputs)
                 outputs = affine(outputs, 0, original, 1, [0.0])
                 outputs = outputs[..., 128:128+1024,28:28+1224]
 
@@ -391,7 +395,7 @@ def val_sfp(val_loader, model, writer, epoch, local_rank, args, criterion, val_l
     model.eval()
     total_loss = 0
     total_samples = 0
-    random_move = RandomMovePad()
+    random_move = RandomMove()
     image = torch.zeros([ 1, 3, 1024, 1224]).cuda(local_rank)
     with torch.no_grad():
         for i, sample_raw in enumerate(val_loader):
@@ -406,9 +410,10 @@ def val_sfp(val_loader, model, writer, epoch, local_rank, args, criterion, val_l
                     sample1 = unfold_image(sample)
                     inputs = sample1['input'].cuda(local_rank)
                     mask = sample1['mask'].cuda(local_rank)
-                    outputs, _, _, _, _, _, _, = model(inputs)
+                    images = sample1['image'].cuda(local_rank)
+                    outputs = model(inputs,images)
                     outputs = outputs * mask
-                    outputs = concat_enhanced_image(outputs)
+                    outputs = concat_image(outputs)
                     # print('1:outputs.shape:', outputs.shape)
                     outputs = affine(outputs, 0, original, 1, [0.0])
                     outputs = outputs[..., 128:128+1024,28:28+1224]
@@ -461,6 +466,7 @@ def val_sfp_PlanB(val_loader, model, writer, epoch, local_rank, args, criterion,
         for i, sample in enumerate(val_loader):
 
             inputs   = sample['input'].cuda(device)              # B=1, C=3/4, H, W
+            image   = sample['image'].cuda(device)
             gt       = sample['ground_truth'].float().cuda(device) / 255.
             mask     = sample['mask'].unsqueeze(1).cuda(device)  # (1,1,H,W)
             gt *= mask
@@ -475,7 +481,8 @@ def val_sfp_PlanB(val_loader, model, writer, epoch, local_rank, args, criterion,
                 for x in range(0, W - PATCH + 1, STRIDE):
 
                     patch = inputs[..., y:y+PATCH, x:x+PATCH]     # (1,C,256,256)
-                    pred, *_ = model(patch)                      # (1,3,256,256)  ← 改成你的输出
+                    patch2 = image[..., y:y+PATCH, x:x+PATCH]
+                    pred, *_ = model(patch, patch2)                      # (1,3,256,256)  ← 改成你的输出
                     pred = pred * window                         # 加权
                     out_sum[..., y:y+PATCH, x:x+PATCH] += pred
                     w_sum[...,  y:y+PATCH, x:x+PATCH] += window

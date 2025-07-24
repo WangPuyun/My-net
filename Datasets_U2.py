@@ -38,15 +38,23 @@ class MyDataset(Dataset):
         # enhanced_images = torch.as_tensor(img_gt['enhanced_images'], dtype=torch.float32).permute(2, 0, 1)
         CleanWater = torch.as_tensor(img_gt['CleanWater'], dtype=torch.float32).permute(2, 0, 1)
         ground_truth = torch.as_tensor(img_gt['I_Normal_gt'], dtype=torch.float32).permute(2, 0, 1)
-        P = img_gt['P']
-        P = P[:, :, 1:5]
-        P1 = torch.as_tensor(P, dtype=torch.float32).permute(2, 0, 1)
         mask = torch.as_tensor(img_gt['mask'], dtype=torch.float32)
-        input = torch.cat([image, P1], dim=0)
-        # input = torch.cat([enhanced_images, input], dim=0)
-        filename = self.image_gt.iloc[idx, 0].rstrip(".mat")
-        sample = { 'input': input, 'ground_truth': ground_truth, 'mask': mask, 'CleanWater': CleanWater, 'mat_path': img_gt_file_path, 'P': img_gt['P'], 'filename':filename}
 
+        N1 = torch.as_tensor(img_gt['Diffuse'], dtype=torch.float32).permute(2, 0, 1)
+        N2 = torch.as_tensor(img_gt['Specular1'], dtype=torch.float32).permute(2, 0, 1)
+        N3 = torch.as_tensor(img_gt['Specular2'], dtype=torch.float32).permute(2, 0, 1)
+        N = torch.cat([N1, N2, N3], dim=0)
+        input = torch.cat([image, N], dim=0)
+
+        # P = img_gt['P']
+        # P = P[:, :, 1:5]
+        # P1 = torch.as_tensor(P, dtype=torch.float32).permute(2, 0, 1)
+        # input = torch.cat([image, P1], dim=0)
+
+        # input = torch.cat([enhanced_images, input], dim=0)
+        
+        filename = self.image_gt.iloc[idx, 0].rstrip(".mat")
+        sample = { 'input': input, 'ground_truth': ground_truth, 'mask': mask, 'CleanWater': CleanWater, 'mat_path': img_gt_file_path, 'P': img_gt['P'], 'filename':filename, 'image': image}
         if self.transform:
             sample = self.transform(sample)
 
@@ -85,7 +93,7 @@ class RandomCrop(object):
     """
 
     def __call__(self, sample):
-        input, ground_truth, mask, CleanWater, mat_path = sample['input'], sample['ground_truth'], sample['mask'], sample['CleanWater'], sample['mat_path']
+        input, ground_truth, mask, CleanWater, mat_path, image = sample['input'], sample['ground_truth'], sample['mask'], sample['CleanWater'], sample['mat_path'], sample['image']
 
         crop = torchvision.transforms.RandomCrop(256)
 
@@ -97,6 +105,8 @@ class RandomCrop(object):
             # print(a)
             if a / 65536 > 0.5:  # Iraw为0.25 原来为0.5
                 torch.random.manual_seed(seed)
+                image1 = crop(image)
+                torch.random.manual_seed(seed)
                 input = crop(input)
                 torch.random.manual_seed(seed)
                 ground_truth = crop(ground_truth)
@@ -104,7 +114,7 @@ class RandomCrop(object):
                 CleanWater = crop(CleanWater)
                 break
 
-        return {'input': input, 'ground_truth': ground_truth, 'mask': mask_temp, 'CleanWater': CleanWater, 'mat_path': mat_path, 'filename':sample['filename']}
+        return {'input': input, 'ground_truth': ground_truth, 'mask': mask_temp, 'CleanWater': CleanWater, 'mat_path': mat_path, 'filename':sample['filename'], 'image': image1}
 
 class RandomMovePad(object):
     """随机平移（含对称 Padding 以防像素丢失）"""
@@ -148,7 +158,7 @@ class RandomMovePad(object):
 
 class RandomMove(object):# 我发现师兄用的RandomMove和TranLate是一样的
     def __call__(self, sample, target_size=(1024, 1216)):
-        input, ground_truth, mask, CleanWater, mat_path = sample['input'], sample['ground_truth'], sample['mask'], sample['CleanWater'], sample['mat_path']
+        input, ground_truth, mask, CleanWater, mat_path, image = sample['input'], sample['ground_truth'], sample['mask'], sample['CleanWater'], sample['mat_path'], sample['image']
 
         mask = torch.unsqueeze(mask, 0)
         angle = 0
@@ -158,6 +168,8 @@ class RandomMove(object):# 我发现师兄用的RandomMove和TranLate是一样�
         translate = [random.choice(ls), random.choice(ls)]
         seed = torch.random.seed()
         torch.random.manual_seed(seed)
+        image_move = affine(image, angle, translate, scale, shear)
+        torch.random.manual_seed(seed)
         input = affine(input, angle, translate, scale, shear)
         torch.random.manual_seed(seed)
         ground_truth = affine(ground_truth, angle, translate, scale, shear)
@@ -166,18 +178,23 @@ class RandomMove(object):# 我发现师兄用的RandomMove和TranLate是一样�
         mask = torch.squeeze(mask)
         torch.random.manual_seed(seed)
         CleanWater = affine(CleanWater, angle, translate, scale, shear)
-        return {'input': input, 'ground_truth': ground_truth, 'mask': mask, 'CleanWater': CleanWater, 'mat_path': mat_path, 'distant': translate, 'filename':sample['filename']}
+        return {'input': input, 'ground_truth': ground_truth, 'mask': mask, 'CleanWater': CleanWater, 'mat_path': mat_path, 'distant': translate, 'filename':sample['filename'], 'image': image_move}
 
 def unfold_image(sample):
-    input, ground_truth, mask, CleanWater, mat_path = sample['input'], sample['ground_truth'], sample['mask'], sample['CleanWater'], sample['mat_path']
-    input, mask = input.squeeze(0), mask.squeeze(0)
-    patches1 = input.unfold(1, 256, 256).unfold(2, 256, 256)
-    patches1 = patches1.reshape(8, -1, 256, 256)
+    input, ground_truth, mask, CleanWater, mat_path, image = sample['input'], sample['ground_truth'], sample['mask'], sample['CleanWater'], sample['mat_path'], sample['image']
+    input, mask, image = input.squeeze(0), mask.squeeze(0), image.squeeze(0)
+    patches1 = input.unfold(2, 256, 256).unfold(3, 256, 256)
+    patches1 = patches1.reshape(13, -1, 256, 256)
     patches1.transpose_(0, 1)
+    print("unfold_image input.shape:", input.shape)
 
-    patches2 = mask.unfold(0, 256, 256).unfold(1, 256, 256)
+    patches2 = mask.unfold(1, 256, 256).unfold(2, 256, 256)
     patches2 = patches2.reshape(1, -1, 256, 256)
     patches2.transpose_(0, 1)
+
+    patches3 = image.unfold(2, 256, 256).unfold(3, 256, 256)
+    patches3 = patches3.reshape(4, -1, 256, 256)
+    patches3.transpose_(0, 1)
     # else:
     #     patches1 = input.unfold(2, 256, 256).unfold(3, 256, 256)
     #     patches1 = patches1.reshape(8,4,-1,256,256)
@@ -187,7 +204,7 @@ def unfold_image(sample):
     #     patches2 = patches2.reshape(8, 1, -1, 256, 256)
     #     patches2 = patches2.permute(0, 2, 1, 3, 4)  # 交换 batch 和 patch 维度
 
-    return {'input': patches1, 'ground_truth': ground_truth, 'mask': patches2, 'CleanWater': CleanWater, 'mat_path': mat_path, 'filename':sample['filename']}
+    return {'input': patches1, 'ground_truth': ground_truth, 'mask': patches2, 'CleanWater': CleanWater, 'mat_path': mat_path, 'filename':sample['filename'], 'image': patches3}
 
 def unfold_enhanced_image(sample):
     input, ground_truth, mask, CleanWater, mat_path = sample['input'], sample['ground_truth'], sample['mask'], sample['CleanWater'], sample['mat_path']

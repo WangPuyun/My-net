@@ -9,7 +9,7 @@ from torch.backends import cudnn
 import torch.nn as nn
 from tqdm import tqdm
 import glob
-os.environ['CUDA_VISIBLE_DEVICES'] = '3,4,5,6'
+os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,6,7'
 
 parser = argparse.ArgumentParser(description='PyTorch Network Training')
 parser.add_argument("--model_name", type=str, default=None, help="是否加载模型继续训练，重头开始训练 defaule=None, 继续训练defaule设置为'/**.pth'")
@@ -20,7 +20,7 @@ parser.add_argument('--event_dir', default="./runs", help='tensorboard事件文�
 parser.add_argument("cos", action='store_true', help="use cos decay learning rate")
 parser.add_argument("--epochs", type=int, default=1000)
 parser.add_argument('--warmup_epochs', type=int, default=50, help='学习率预热epoch数')
-parser.add_argument('--checkpoints_dir', default="./pt/U2net_withoutenhanced", help='模型检查点文件的路径(以继续培训)')
+parser.add_argument('--checkpoints_dir', default="./pt/DeepSfP", help='模型检查点文件的路径(以继续培训)')
 args = parser.parse_args()
 
 train_loss_list = []  # 只在主进程维护一个 loss_list
@@ -73,7 +73,7 @@ def main_worker(local_rank, nprocs,args):
         # config.adjust_learning_rate(optimizer, epoch, args)
 
         model,train_loss_list = config.train_sfp(train_loader, model, criterion, optimizer, epoch, writer, args.local_rank, args, train_loss_list)
-        val_loss_list = config.val_sfp(val_loader, model, writer, epoch, args.local_rank, args, criterion, val_loss_list)
+        val_loss_list = config.val_sfp_PlanB(val_loader, model, writer, epoch, args.local_rank, args, criterion, val_loss_list)
         torch.distributed.barrier()  # 等待所有进程计算完毕
         # scheduler.step(val_loss_list[-1])  # 更新学习率
         # 记录学习率（仅在主进程）
@@ -83,7 +83,7 @@ def main_worker(local_rank, nprocs,args):
             lr_list.append(current_lr)
             if val_loss_list[-1] < min_val_loss:
                 min_val_loss = val_loss_list[-1]
-                best_model_path = './pt/U2net_withoutenhanced_best'
+                best_model_path = './pt/DeepSfP_best'
                 # 找到所有 .pth 文件
                 pth_files = glob.glob(os.path.join(best_model_path, '*.pth'))
                 # 删除文件
