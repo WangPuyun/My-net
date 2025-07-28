@@ -18,8 +18,9 @@ from Datasets_U2 import RandomMove, unfold_image, concat_image
 from torchvision.utils import save_image
 from AttentionU2Net import CAOutside
 from AttentionU2Net import U2Net_with_enhance_img
+from DeepSfP_Net import DeepSfP
 from utils_window import PATCH, OVERLAP, STRIDE, hann2d
-os.environ['CUDA_VISIBLE_DEVICES'] = '1,3,7'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1,4,7'
 
 def parse_args():
     parser = argparse.ArgumentParser(description='PyTorch Network Testing')
@@ -50,11 +51,11 @@ def main_worker(local_rank, nprocs, args):
     config.init_distributed(local_rank=args.local_rank, nprocs=args.nprocs)
 
     # 构建模型与优化器（测试时通常无需使用optimizer，但此处为了演示可共用）
-    model = U2Net_with_enhance_img.net
+    model = DeepSfP.Network()
     model = model.cuda(args.local_rank)
 
     # 加载指定的checkpoint
-    checkpoint = torch.load('./pt/1000.pth')
+    checkpoint = torch.load('./pt/DeepSfP_best/875.pth')
     model.load_state_dict(checkpoint['model'])
 
     # 同步BN、防止多卡测试时因BN计算导致结果不一致
@@ -83,6 +84,7 @@ def main_worker(local_rank, nprocs, args):
     with torch.no_grad():
         for i, sample in enumerate(test_loader):
             inputs   = sample['input'].cuda(device)
+            image   = sample['image'].cuda(device)
             gt       = sample['ground_truth'].float().cuda(device) / 255.
             mask     = sample['mask'].unsqueeze(1).cuda(device)
             gt *= mask
@@ -96,7 +98,8 @@ def main_worker(local_rank, nprocs, args):
             for y in range(0, H - PATCH + 1, STRIDE):
                 for x in range(0, W - PATCH + 1, STRIDE):
                     patch = inputs[..., y:y+PATCH, x:x+PATCH]
-                    pred, *_ = model(patch)
+                    patch2 = image[..., y:y+PATCH, x:x+PATCH]
+                    pred, *_ = model(patch, patch2)
                     pred = pred * window
                     out_sum[..., y:y+PATCH, x:x+PATCH] += pred
                     w_sum[...,  y:y+PATCH, x:x+PATCH] += window

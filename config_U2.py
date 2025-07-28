@@ -4,6 +4,8 @@ import UPIE
 import Unet
 import ResNet
 import DCC
+from SfPUEL import model_utils as mutil
+from SfPUEL import SfPUEL
 from torchvision.transforms.functional import affine
 from torchvision.utils import save_image
 from torch.nn.functional import normalize
@@ -37,7 +39,7 @@ def create_model_and_optimizer(args):
     训练时调用
     创建模型和优化器，返回(model, optimizer)。
     """
-    model = DeepSfP.Network()
+    model = SfPUEL.SfPUEL([4,6])
 
     # 将模型移动到指定设备（本地 GPU）
     # print(args.local_rank)
@@ -84,14 +86,14 @@ def create_dataloaders(args):
     # 训练集
     train_set = MyDataset(
         csv_file='Underwater Dataset/train_list_withoutcleanwater.csv',
-        root_dir='Underwater Dataset/version3_with_diff_specu',
+        root_dir='Underwater Dataset/SfPUEL',
         transform=RandomCrop()  # RandomCrop 是数据增强
     )
 
     # 验证集
     val_set = MyDataset(
         csv_file='Underwater Dataset/val_list_withoutcleanwater.csv',
-        root_dir='Underwater Dataset/version3_with_diff_specu',
+        root_dir='Underwater Dataset/SfPUEL',
         transform=False  
     )
 
@@ -133,7 +135,7 @@ def test_dataloaders(args):
     # 验证集
     test_set = MyDataset(
         csv_file='Underwater Dataset/test_list_withoutcleanwater.csv',
-        root_dir='Underwater Dataset/version3_with_diff_specu',
+        root_dir='Underwater Dataset/SfPUEL',
         transform=False
     )
 
@@ -232,11 +234,25 @@ def train_sfp(train_loader, model, criterion, optimizer, epoch, writer, local_ra
         mask = sample['mask']
         mask = mask.cuda(local_rank, non_blocking=True)  # False or True
         mask1 = torch.unsqueeze(mask, 1)
-        inputs = sample['input']
-        inputs.requires_grad_(True)
-        inputs = inputs.cuda(local_rank, non_blocking=True)
+        # inputs = sample['input']
+        # inputs.requires_grad_(True)
+        # inputs = inputs.cuda(local_rank, non_blocking=True)
+        
+        normal_branch_inputs = [['polar', 'mask'], ['stokes']]
+        data = {
+            'polar':images.unsqueeze(2).repeat(1, 1, 3, 1, 1),
+            'mask':mask1,
+            'name':sample['filename'],
+            'normal_gt':ground_truths
+        }
+        inputs = mutil.get_inputs(data, [['polar','mask'],['stokes']])
 
-        outputs = model(inputs,images)
+        pred = model(inputs, 512, 256, 2048)
+
+        mutil.update_data(data, pred, 'train')
+        mutil.postprocess_data(data, 'train')
+
+        outputs = data['normal_pred']
         outputs = outputs * mask1
         outputs = normalize(outputs, dim=1)
         ground_truths = ground_truths * mask1
