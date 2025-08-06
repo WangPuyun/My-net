@@ -104,14 +104,14 @@ def create_dataloaders(args):
     """
     # 训练集
     train_set = MyDataset(
-        csv_file='Underwater Dataset/train_list_withoutcleanwater.csv',
+        csv_file='Underwater Dataset/temp_list_withoutcleanwater.csv',
         root_dir='Underwater Dataset/SfPUEL',
         transform=RandomCrop()  # RandomCrop 是数据增强
     )
 
     # 验证集
     val_set = MyDataset(
-        csv_file='Underwater Dataset/val_list_withoutcleanwater.csv',
+        csv_file='Underwater Dataset/temp_list_withoutcleanwater.csv',
         root_dir='Underwater Dataset/SfPUEL',
         transform=False  
     )
@@ -519,10 +519,21 @@ def val_sfp_PlanB(val_loader, model, writer, epoch, local_rank, args, criterion,
             for y in range(0, H - PATCH + 1, STRIDE):
                 for x in range(0, W - PATCH + 1, STRIDE):
 
-                    patch = inputs[..., y:y+PATCH, x:x+PATCH]     # (1,C,256,256)
-                    patch2 = image[..., y:y+PATCH, x:x+PATCH]
-                    pred, *_ = model(patch, patch2)                      # (1,3,256,256)  ← 改成你的输出
-                    pred = pred * window                         # 加权
+                    # patch = inputs[..., y:y+PATCH, x:x+PATCH]     # (1,C,256,256)
+                    patch = image[..., y:y+PATCH, x:x+PATCH]
+                    patch2 = mask[..., y:y+PATCH, x:x+PATCH]
+                    patch3 = gt[..., y:y+PATCH, x:x+PATCH]
+
+                    data = {
+                        'polar':patch.unsqueeze(2).repeat(1, 1, 3, 1, 1),
+                        'mask':patch2,
+                        'name':sample['filename'],
+                        'normal_gt':patch3
+                    }
+                    inputs = mutil.get_inputs(data, [['polar', 'mask'], ['stokes']])
+
+                    pred = model(inputs, 512, 256, 2048)                      # (1,3,256,256)  ← 改成你的输出
+                    pred = pred['normal'] * window                         # 加权
                     out_sum[..., y:y+PATCH, x:x+PATCH] += pred
                     w_sum[...,  y:y+PATCH, x:x+PATCH] += window
 

@@ -71,7 +71,7 @@ def main_worker(local_rank, nprocs,args):
         val_sampler.set_epoch(epoch)
 
         # config.adjust_learning_rate(optimizer, epoch, args)
-
+        print(epoch)
         model,train_loss_list = config.train_sfp(train_loader, model, criterion, optimizer, epoch, writer, args.local_rank, args, train_loss_list)
         val_loss_list = config.val_sfp_PlanB(val_loader, model, writer, epoch, args.local_rank, args, criterion, val_loss_list)
         torch.distributed.barrier()  # 等待所有进程计算完毕

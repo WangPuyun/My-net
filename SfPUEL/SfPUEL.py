@@ -131,6 +131,8 @@ class SfPUEL(nn.Module):
                     im_flat_spl = im_flat[ids, :, :]
                     # 7.对每个小批idset做细粒度推理
                     coords = utils.ind2coords(decoder_imgsize, ids, ddevice).expand(int(num_im[b]),-1,-1,-1)
+                    if len(ids) == 0:
+                        continue
                     ext_feat_spl = F.grid_sample(ext_feat[target, :, :, :], coords, mode='bilinear', align_corners=False).reshape(len(target), -1, len(ids)).permute(2,0,1)
                     enh_feat = self.image_attn_module(ext_feat_spl, im_flat_spl)
                     glb_feat = self.pixel_attn_module(enh_feat, coords[:1])
