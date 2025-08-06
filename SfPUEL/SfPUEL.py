@@ -7,10 +7,17 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+import torch, psutil, os, gc
 from .sdm_utils.decompose_tensors import divide_tensor_spatial, merge_tensor_spatial
 from .sdm_utils import utils
 from .sfpuel_utils import model as sfpuel
+
+def show_mem(stage):
+    print(f"\n--- {stage} ---")
+    print("CUDA allocated: %.2f MB" % (torch.cuda.memory_allocated() / 1024**2))
+    print("CUDA reserved : %.2f MB" % (torch.cuda.memory_reserved()  / 1024**2))
+    print("CPU RAM       : %.2f MB" % (psutil.Process(os.getpid()).memory_info().rss / 1024**2))
+    gc.collect(); torch.cuda.empty_cache()
 
 class SfPUEL(nn.Module):
     def __init__(self, in_channels):

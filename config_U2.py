@@ -19,13 +19,32 @@ from AttentionU2Net import U2Net
 from DeepSfP_Net import DeepSfP
 from math import pi
 import math
+import torch, psutil, os, gc
+from torch.utils.checkpoint import checkpoint
 from utils_window import PATCH, OVERLAP, STRIDE, hann2d
+
+
+def wrap_with_ckpt(module):
+    """把 module.forward 改写成 checkpoint 版本"""
+    orig_fwd = module.forward
+    def new_fwd(*args, **kwargs):
+        return checkpoint(orig_fwd, *args, **kwargs, use_reentrant=False)
+    module.forward = new_fwd
+    return module
+
+def show_mem(stage):
+    print(f"\n--- {stage} ---")
+    print("CUDA allocated: %.2f MB" % (torch.cuda.memory_allocated() / 1024**2))
+    print("CUDA reserved : %.2f MB" % (torch.cuda.memory_reserved()  / 1024**2))
+    print("CPU RAM       : %.2f MB" % (psutil.Process(os.getpid()).memory_info().rss / 1024**2))
+    gc.collect(); torch.cuda.empty_cache()
+
 def init_distributed(local_rank, nprocs, url='tcp://localhost:25484'):
     """
     初始化分布式训练环境。
     """
     dist.init_process_group(
-        backend='nccl',  # 使用 nccl 后端
+        backend='gloo',  # 使用 nccl 后端
         init_method=url,  # 指定初始化通讯方式（ip+端口）
         world_size=nprocs,  # 总进程数
         rank=local_rank  # 当前进程 rank
@@ -75,7 +94,7 @@ def wrap_model_distributed(model, local_rank):
     model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
 
     # 使用分布式并行包装
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], find_unused_parameters=True)
     return model
 
 
@@ -223,6 +242,10 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, local_rank, 
     return model, train_loss_list
 def train_sfp(train_loader, model, criterion, optimizer, epoch, writer, local_rank, args, train_loss_list):
     model.train()
+    # 减少显存
+    model.module.feature_extractor   = wrap_with_ckpt(model.module.feature_extractor)
+    model.module.image_attn_module   = wrap_with_ckpt(model.module.image_attn_module)
+    model.module.pixel_attn_module   = wrap_with_ckpt(model.module.pixel_attn_module)
     running_loss = 0
     total_samples = 0
     for i, sample in enumerate(train_loader):
