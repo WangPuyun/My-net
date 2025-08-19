@@ -20,7 +20,9 @@ from AttentionU2Net import CAOutside
 from AttentionU2Net import U2Net_with_enhance_img
 from DeepSfP_Net import DeepSfP
 from utils_window import PATCH, OVERLAP, STRIDE, hann2d
-os.environ['CUDA_VISIBLE_DEVICES'] = '1,2,3'
+import cv2
+import matplotlib.pyplot as plt
+os.environ['CUDA_VISIBLE_DEVICES'] = '3,4,5'
 
 def parse_args():
     parser = argparse.ArgumentParser(description='PyTorch Network Testing')
@@ -108,17 +110,64 @@ def main_worker(local_rank, nprocs, args):
             full_pred = out_sum / w_sum.clamp_min(1e-6)
             full_pred = torch.nn.functional.normalize(full_pred, dim=1)
             full_pred *= mask
+            filename = sample['filename']
 
             # -----------计算角度 MAE-----------
-            M  = torch.sum(mask)
-            m  = torch.sum(criterion(full_pred , gt )) / M
-            mae = torch.acos(m.clamp(-1 + 1e-6, 1 - 1e-6)) * 180 / pi
+            gt_n = (gt *2.0 -1.0) * mask
+            pred_n = (full_pred *2.0 -1.0) * mask
+
+            cos = criterion(pred_n, gt_n)
+            cos = torch.clamp(cos, -1.0, 1.0)
+            ang = (torch.acos(cos) * 180.0 / pi).unsqueeze(1)
+            ang = ang * mask
+
+            M = torch.sum(mask)
+            valid = ang[mask.bool()]
+            mae = valid.mean()                      # 均值
+            median_ang = valid.median()             # 中位数
+            rmse = torch.sqrt((valid ** 2).mean())  # 均方根误差
 
             total_loss   += mae.item()
             total_samples += 1
 
-            filename = sample['filename']
             save_image(full_pred, './results_sfp/{}_{}.bmp'.format(filename[0], mae))
+            
+            # -----------新增误差映射图-----------
+
+            stats_text = (
+                f"Mean (MAE): {mae.item():.2f}°\n"
+                f"Median   : {median_ang.item():.2f}°\n"
+                f"RMSE     : {rmse.item():.2f}°"
+            )
+
+            theta_max = 50.0
+            ang_clamped = torch.clamp(ang.squeeze(1), 0.0, theta_max)
+            ang_clamped[mask.squeeze(1) == 0] = float('nan')
+            fig, ax = plt.subplots(figsize=(6, 6))
+            im = ax.imshow(ang_clamped.squeeze().cpu().numpy(),       # 用角度数据，而非已着色的 BGR
+                        cmap='jet',
+                        vmin=0, vmax=theta_max)
+            ax.axis('off')
+            # ax.text(
+            #     0.02, 0.98, stats_text,
+            #     transform=ax.transAxes,
+            #     ha='left', va='top',
+            #     fontsize=12, fontweight='bold',
+            #     bbox=dict(boxstyle='round', facecolor='black', alpha=0.5, pad=0.4),
+            #     color='white',
+            #     zorder=10,
+            # )
+            ax.set_title('Angular Error')
+
+            cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            cbar.set_label('Error (°)')
+
+            fig.tight_layout()
+            fig.savefig(f'./error_maps/{filename[0]}.png', dpi=300, bbox_inches='tight')
+            plt.close(fig)
+
+
+            
             
             
 
