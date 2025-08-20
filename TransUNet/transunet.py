@@ -109,8 +109,8 @@ class Block(nn.Module):
 
 # 最终的网络结构
 class TransUnet(nn.Module):
-    def __init__(self, n_channels, n_classes, dim=64, residual_num=16, bilinear=True, norm='bn', dropout=0.0,
-                 skip_res=False):
+    def __init__(self, n_channels=11, n_classes=3, dim=64, residual_num=16, bilinear=True, norm='bn', dropout=0.0,
+                 skip_res=True):
         super(TransUnet, self).__init__()
         self.n_channels = n_channels
         self.n_classes = n_classes

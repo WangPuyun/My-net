@@ -19,6 +19,7 @@ from torchvision.utils import save_image
 from AttentionU2Net import CAOutside
 from AttentionU2Net import U2Net_with_enhance_img
 from DeepSfP_Net import DeepSfP
+from TransUNet import TransUnet
 from utils_window import PATCH, OVERLAP, STRIDE, hann2d
 import cv2
 import matplotlib.pyplot as plt
@@ -53,11 +54,11 @@ def main_worker(local_rank, nprocs, args):
     config.init_distributed(local_rank=args.local_rank, nprocs=args.nprocs)
 
     # 构建模型与优化器（测试时通常无需使用optimizer，但此处为了演示可共用）
-    model = DeepSfP.Network()
+    model = CAOutside.AttentionU2NetOutside()
     model = model.cuda(args.local_rank)
 
     # 加载指定的checkpoint
-    checkpoint = torch.load('./pt/DeepSfP_best/875.pth')
+    checkpoint = torch.load('./pt/U2Net/1000.pth')
     model.load_state_dict(checkpoint['model'])
 
     # 同步BN、防止多卡测试时因BN计算导致结果不一致
@@ -101,7 +102,7 @@ def main_worker(local_rank, nprocs, args):
                 for x in range(0, W - PATCH + 1, STRIDE):
                     patch = inputs[..., y:y+PATCH, x:x+PATCH]
                     patch2 = image[..., y:y+PATCH, x:x+PATCH]
-                    pred, *_ = model(patch, patch2)
+                    pred, *_ = model(patch)
                     pred = pred * window
                     out_sum[..., y:y+PATCH, x:x+PATCH] += pred
                     w_sum[...,  y:y+PATCH, x:x+PATCH] += window

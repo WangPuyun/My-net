@@ -41,17 +41,17 @@ class MyDataset(Dataset):
         mask = torch.as_tensor(img_gt['mask'], dtype=torch.float32)
 
         # DeepSfP
-        N1 = torch.as_tensor(img_gt['Diffuse'], dtype=torch.float32).permute(2, 0, 1)
-        N2 = torch.as_tensor(img_gt['Specular1'], dtype=torch.float32).permute(2, 0, 1)
-        N3 = torch.as_tensor(img_gt['Specular2'], dtype=torch.float32).permute(2, 0, 1)
-        N = torch.cat([N1, N2, N3], dim=0)
-        input = torch.cat([image, N], dim=0)
+        # N1 = torch.as_tensor(img_gt['Diffuse'], dtype=torch.float32).permute(2, 0, 1)
+        # N2 = torch.as_tensor(img_gt['Specular1'], dtype=torch.float32).permute(2, 0, 1)
+        # N3 = torch.as_tensor(img_gt['Specular2'], dtype=torch.float32).permute(2, 0, 1)
+        # N = torch.cat([N1, N2, N3], dim=0)
+        # input = torch.cat([image, N], dim=0)
 
         # AttentionU2Net
-        # P = img_gt['P']
-        # P = P[:, :, 1:5]
-        # P1 = torch.as_tensor(P, dtype=torch.float32).permute(2, 0, 1)
-        # input = torch.cat([image, P1], dim=0)
+        P = img_gt['P']
+        P = P[:, :, 1:5]
+        P1 = torch.as_tensor(P, dtype=torch.float32).permute(2, 0, 1)
+        input = torch.cat([image, P1], dim=0)
 
         # Image Enhancement/Dehazing
         # enhanced_images = torch.as_tensor(img_gt['enhanced_images'], dtype=torch.float32).permute(2, 0, 1)
