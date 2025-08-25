@@ -9,6 +9,7 @@ import random
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset
 import warnings
+import numpy as np
 import torchvision.transforms.functional as F
 warnings.filterwarnings("ignore")
 
@@ -41,23 +42,23 @@ class MyDataset(Dataset):
         mask = torch.as_tensor(img_gt['mask'], dtype=torch.float32)
 
         # DeepSfP
-        # N1 = torch.as_tensor(img_gt['Diffuse'], dtype=torch.float32).permute(2, 0, 1)
-        # N2 = torch.as_tensor(img_gt['Specular1'], dtype=torch.float32).permute(2, 0, 1)
-        # N3 = torch.as_tensor(img_gt['Specular2'], dtype=torch.float32).permute(2, 0, 1)
-        # N = torch.cat([N1, N2, N3], dim=0)
-        # input = torch.cat([image, N], dim=0)
+        N1 = torch.as_tensor(img_gt['Diffuse'], dtype=torch.float32).permute(2, 0, 1)
+        N2 = torch.as_tensor(img_gt['Specular1'], dtype=torch.float32).permute(2, 0, 1)
+        N3 = torch.as_tensor(img_gt['Specular2'], dtype=torch.float32).permute(2, 0, 1)
+        N = torch.cat([N1, N2, N3], dim=0)
+        input = torch.cat([image, N], dim=0)
 
         # AttentionU2Net
-        P = img_gt['P']
-        P = P[:, :, 1:5]
-        P1 = torch.as_tensor(P, dtype=torch.float32).permute(2, 0, 1)
-        input = torch.cat([image, P1], dim=0)
+        # P = img_gt['P']
+        # P = P[:, :, 1:5]
+        # P1 = torch.as_tensor(P, dtype=torch.float32).permute(2, 0, 1)
+        # input = torch.cat([image, P1], dim=0)
 
         # Image Enhancement/Dehazing
-        # enhanced_images = torch.as_tensor(img_gt['enhanced_images'], dtype=torch.float32).permute(2, 0, 1)
-        # input = torch.cat([enhanced_images, input], dim=0)
+        enhanced_images = torch.as_tensor(img_gt['enhanced_images'], dtype=torch.float32).permute(2, 0, 1)
+        input = torch.cat([input, enhanced_images], dim=0)
 
-        # # TransUNet
+        # SPW
         # viewing_encoding = torch.as_tensor(get_coordinate(image), dtype=torch.float32).permute(2, 0, 1)
         # P = img_gt['P']
         # P = P[:, :, 1:5]
@@ -294,3 +295,12 @@ def concat_enhanced_image(outputs):
 
     image = image1.unsqueeze(0)
     return image
+
+def get_coordinate(depth):
+  # c * h * w
+    c, h, w = depth.shape
+    # 归一化为[-1, 1]
+    u = (np.tile(np.arange(w), [h, 1]) - w * 0.5) / (0.5 * w)
+    v = (np.tile(np.arange(h)[..., None], [1, w]) - 0.5 * h) / (0.5 * h)  #
+    coordinate = np.concatenate([u[..., None], v[..., None], 1. * np.ones([h, w, 1])], axis=2)  # [h, w, 3]
+    return coordinate

@@ -8,7 +8,7 @@ class Network(nn.Module):
         super(Network, self).__init__()
         self.skip_res = skip_res
 
-        self.encoder_pre = Extractor(13, 4)
+        self.encoder_pre = Extractor(17, 4)
         self.encoder_1 = ConvDown(4, 32)
         self.encoder_2 = ConvDown(32, 64)
         self.encoder_3 = ConvDown(64, 128)

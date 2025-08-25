@@ -39,7 +39,7 @@ def create_model_and_optimizer(args):
     训练时调用
     创建模型和优化器，返回(model, optimizer)。
     """
-    model = SfPUEL.SfPUEL([4,6])
+    model = DeepSfP.Network()
 
     # 将模型移动到指定设备（本地 GPU）
     # print(args.local_rank)
@@ -171,56 +171,6 @@ def save_checkpoint(model, optimizer, epoch, checkpoints_dir):
     torch.save(checkpoint, save_path)
     print(f"模型已保存到：{save_path}")
 
-
-def train(train_loader, model, criterion, optimizer, epoch, writer, local_rank, args, train_loss_list):
-    model.train()
-    running_loss = 0
-    total_samples = 0
-    for i, sample in enumerate(train_loader):
-        # 4通道分别是4个偏振态的图像，同时输入模型，旨在让模型学习到各个通道之间的相关性
-        ground_truths = sample['CleanWater']
-        ground_truths = ground_truths[:,0:4,:,:]
-        ground_truths = ground_truths.cuda(local_rank, non_blocking=True)
-        inputs = sample['input']
-        inputs = inputs[:,0:4,:,:]
-        inputs = inputs.cuda(local_rank, non_blocking=True)
-        mask = sample['mask']
-        mask = mask.unsqueeze(1)
-        mask = mask.cuda(local_rank, non_blocking=True)
-        mask = mask.expand_as(ground_truths)
-        
-
-        optimizer.zero_grad()  # 清除之前的梯度
-        # 前向传播
-        outputs = model(inputs)
-        _, _, h, w = outputs.size()
-        outputs *= mask
-        ground_truths *= mask
-
-        loss = criterion(outputs, ground_truths)
-
-        # 反向传播
-        loss.backward()  # 计算本批次梯度
-        optimizer.step()  # 更新参数
-
-        batch_size = ground_truths.size(0)  # 获取 batch_size
-        total_samples += batch_size
-        running_loss += loss.item() * batch_size
-
-    # 计算所有 GPU 的 loss 总和和样本总数
-    running_loss_tensor = torch.tensor([running_loss], dtype=torch.float32, device='cuda')
-    total_samples_tensor = torch.tensor([total_samples], dtype=torch.float32, device='cuda')
-
-    # 让所有 GPU 计算的 running_loss 和 total_samples 求和
-    running_loss_tensor = sync_tensor(running_loss_tensor)
-    total_samples_tensor = sync_tensor(total_samples_tensor)
-
-    epoch_loss = running_loss_tensor.item() / total_samples_tensor.item()
-    if local_rank == 0:
-        writer.add_scalar('training_loss', epoch_loss, epoch + 1)
-    train_loss_list.append(epoch_loss)
-
-    return model, train_loss_list
 def train_sfp(train_loader, model, criterion, optimizer, epoch, writer, local_rank, args, train_loss_list):
     model.train()
     running_loss = 0
@@ -231,33 +181,23 @@ def train_sfp(train_loader, model, criterion, optimizer, epoch, writer, local_ra
         images = images.cuda(local_rank, non_blocking=True)
         ground_truths = sample['ground_truth']
         ground_truths = ground_truths.cuda(local_rank, non_blocking=True)
+        ground_truths = ground_truths/255.0
         mask = sample['mask']
         mask = mask.cuda(local_rank, non_blocking=True)  # False or True
         mask1 = torch.unsqueeze(mask, 1)
-        # inputs = sample['input']
-        # inputs.requires_grad_(True)
-        # inputs = inputs.cuda(local_rank, non_blocking=True)
-        
-        normal_branch_inputs = [['polar', 'mask'], ['stokes']]
-        data = {
-            'polar':images.unsqueeze(2).repeat(1, 1, 3, 1, 1),
-            'mask':mask1,
-            'name':sample['filename'],
-            'normal_gt':ground_truths
-        }
-        inputs = mutil.get_inputs(data, [['polar','mask'],['stokes']])
+        inputs = sample['input']
+        inputs.requires_grad_(True)
+        inputs = inputs.cuda(local_rank, non_blocking=True)
 
-        pred = model(inputs, 512, 256, 2048)
+        outputs = model(inputs, images)
 
-        mutil.update_data(data, pred, 'train')
-        mutil.postprocess_data(data, 'train')
-
-        outputs = data['normal_pred']
         outputs = outputs * mask1
         outputs = normalize(outputs, dim=1)
         ground_truths = ground_truths * mask1
 
-        cosine = 1 - criterion(outputs, ground_truths)
+        outputs_n = (outputs *2.0 -1.0) * mask1
+        ground_truths_n = (ground_truths *2.0 -1.0) * mask1
+        cosine = 1 - criterion(outputs_n, ground_truths_n)
         num_cosine = torch.sum(torch.sum(torch.sum(cosine, dim=1), dim=1))
         M = torch.sum(torch.sum(torch.sum(mask, dim=1), dim=1))  # 物体像素
         back_ground = (train_loader.batch_size * 256 * 256) - M  # 背景像素
@@ -288,186 +228,6 @@ def train_sfp(train_loader, model, criterion, optimizer, epoch, writer, local_ra
     train_loss_list.append(epoch_loss)
         
     return model, train_loss_list
-
-
-
-def val(val_loader, model, writer, epoch, local_rank, args, criterion, val_loss_list):
-    # assert val_loader.batch_size == 1# 与image的batch_size一致
-    model.eval()
-    total_loss = 0
-    total_samples = 0
-    epoch_nonzero = 0
-    epoch_total   = 0
-    random_move = RandomMovePad()
-    image = torch.zeros([ 1, 4, 1024, 1224]).cuda(local_rank)
-    with torch.no_grad():
-        for i, sample_raw in enumerate(val_loader):
-            image.zero_()
-            for j in range(32):
-                sample = random_move(sample_raw)
-                distant = sample['distant']
-                original = [-distant[0], -distant[1]]
-                sample = unfold_enhanced_image(sample)
-                mask = sample['mask'].cuda(local_rank)
-
-                inputs = sample['input']
-                inputs = inputs[:,0:4,:,:]
-                inputs = inputs.cuda(local_rank, non_blocking=True)
-                outputs = model(inputs)
-                # outputs *= mask
-                outputs = concat_image(outputs)
-                outputs = affine(outputs, 0, original, 1, [0.0])
-                outputs = outputs[..., 128:128+1024,28:28+1224]
-
-                image += outputs
-            image = torch.div(image, 32)
-            # draw_tensor_image(image, denormalize=False)
-            ground_truths = sample_raw['CleanWater']
-            ground_truths = ground_truths[:, 0:4, :, :]
-            ground_truths = ground_truths.cuda(local_rank, non_blocking=True)
-            mask = sample_raw['mask'].cuda(local_rank, non_blocking=True)
-            mask = mask.unsqueeze(1)
-            ground_truths = ground_truths * mask
-            image = image * mask
-
-            batch_loss = criterion(image, ground_truths).item()
-            # print('batch_loss:', batch_loss)
-            batch_size = ground_truths.size(0)  # 获取 batch_size
-            total_loss += batch_loss * batch_size
-            total_samples += batch_size
-    # 计算所有 GPU 的 loss 总和和样本总数
-    running_loss_tensor = torch.tensor([total_loss], dtype=torch.float32, device='cuda')
-    total_samples_tensor = torch.tensor([total_samples], dtype=torch.float32, device='cuda')
-
-    # 让所有 GPU 计算的 running_loss 和 total_samples 求和
-    running_loss_tensor = sync_tensor(running_loss_tensor)
-    total_samples_tensor = sync_tensor(total_samples_tensor)
-
-    val_loss = running_loss_tensor.item() / total_samples_tensor.item()
-
-    if local_rank == 0:
-        writer.add_scalar('validation_loss', val_loss, epoch + 1)
-    val_loss_list.append(val_loss)
-    return val_loss_list
-
-def val_PlanB(val_loader, model, writer, epoch, local_rank, args, criterion, val_loss_list):
-    # assert val_loader.batch_size == 1# 与image的batch_size一致
-    model.eval()
-    device = torch.device(f'cuda:{local_rank}')
-    window = hann2d(PATCH,device).unsqueeze(0).unsqueeze(0)
-
-    total_loss, total_samples = 0., 0
-
-    with torch.no_grad():
-        for i, sample in enumerate(val_loader):
-            input = sample['input'][:,0:4,:,:].cuda(device)
-            gt = sample['CleanWater'].cuda(device)
-            mask = sample['mask'].unsqueeze(1).cuda(device)
-            mask = mask.expand_as(gt)
-            gt *= mask
-
-            H, W = input.shape[2:]
-            # 准备空容器
-            out_sum = torch.zeros(1, 4, H, W, device=device)
-            w_sum = torch.zeros(1, 1, H, W, device=device)
-
-            # 滑窗推理
-            for y in range(0, H - PATCH + 1, STRIDE):
-                for x in range(0, W - PATCH + 1, STRIDE):
-                    patch = input[..., y:y+PATCH, x:x+PATCH]
-                    pred = model(patch)
-                    pred = pred * window
-                    out_sum[..., y:y+PATCH, x:x+PATCH] += pred
-                    w_sum[..., y:y+PATCH, x:x+PATCH] += window
-            # 归一化得到整幅结果
-            full_pred = out_sum / w_sum.clamp_min_(1e-3)
-            # full_pred = torch.nn.functional.normalize(full_pred, dim=1)
-            full_pred *= mask
-            
-            # 计算损失
-            loss = criterion(full_pred, gt).item()
-            # print('loss:',loss)
-            batch_size = gt.size(0)
-            total_loss += loss * batch_size
-            total_samples += batch_size
-
-    # 计算所有GPU的loss总和和样本总数
-    running_loss_tensor = torch.tensor([total_loss], dtype=torch.float32, device='cuda')
-    total_samples_tensor = torch.tensor([total_samples], dtype=torch.float32, device='cuda')
-
-    # 让所有 GPU 计算的 running_loss 和 total_samples 求和
-    running_loss_tensor = sync_tensor(running_loss_tensor)
-    total_samples_tensor = sync_tensor(total_samples_tensor)
-
-    val_loss = running_loss_tensor.item() / total_samples_tensor.item()
-
-    if local_rank == 0:
-        writer.add_scalar('validation_loss', val_loss, epoch + 1)
-    val_loss_list.append(val_loss)
-
-    return val_loss_list
-
-def val_sfp(val_loader, model, writer, epoch, local_rank, args, criterion, val_loss_list):
-    model.eval()
-    total_loss = 0
-    total_samples = 0
-    random_move = RandomMove()
-    image = torch.zeros([ 1, 3, 1024, 1224]).cuda(local_rank)
-    with torch.no_grad():
-        for i, sample_raw in enumerate(val_loader):
-            image.zero_()
-            mae = float('nan')
-            while math.isnan(mae):
-                for j in range(32):
-                    sample = random_move(sample_raw)
-                    filename = sample['filename'][0]
-                    distant = sample['distant']
-                    original = [-distant[0],-distant[1]]
-                    sample1 = unfold_image(sample)
-                    inputs = sample1['input'].cuda(local_rank)
-                    mask = sample1['mask'].cuda(local_rank)
-                    images = sample1['image'].cuda(local_rank)
-                    outputs = model(inputs,images)
-                    outputs = outputs * mask
-                    outputs = concat_image(outputs)
-                    # print('1:outputs.shape:', outputs.shape)
-                    outputs = affine(outputs, 0, original, 1, [0.0])
-                    outputs = outputs[..., 128:128+1024,28:28+1224]
-                    # print('2:outputs.shape:', outputs.shape)
-                    image = image + outputs
-                ground_truth = sample_raw['ground_truth'].cuda(local_rank)
-                # ground_truth 原始是 uint8，转为 float 并归一化
-                ground_truth = ground_truth.float() / 255.0
-
-                mask1 = sample_raw['mask'].squeeze(0).cuda(local_rank)
-
-                M = torch.sum(torch.sum(mask1, dim=1))
-
-                image = torch.div(image, 32)
-                image = normalize(image, dim=1)
-                if i%10 == 0 and local_rank == 0:
-                    save_image(image, f'./results_sfp/{filename}.bmp')
-                m = torch.sum(torch.sum(criterion(image, ground_truth))) / M
-                mae = torch.acos(m) * 180 / pi
-                # print('mae:', mae)
-
-            batch_size = ground_truth.size(0)
-            total_loss += mae * batch_size
-            total_samples += batch_size
-    # 计算所有 GPU 的 loss 总和和样本总数
-    running_loss_tensor = torch.tensor([total_loss], dtype=torch.float64, device='cuda')
-    total_samples_tensor = torch.tensor([total_samples], dtype=torch.float64, device='cuda')
-
-    # 让所有 GPU 计算的 running_loss 和 total_samples 求和
-    running_loss_tensor = sync_tensor(running_loss_tensor)
-    total_samples_tensor = sync_tensor(total_samples_tensor)
-
-    val_loss = running_loss_tensor.item() / total_samples_tensor.item()
-
-    if local_rank == 0:
-        writer.add_scalar('validation_loss', val_loss, epoch + 1)
-    val_loss_list.append(val_loss)
-    return val_loss_list
 
 def val_sfp_PlanB(val_loader, model, writer, epoch, local_rank, args, criterion, val_loss_list):
 
@@ -510,7 +270,9 @@ def val_sfp_PlanB(val_loader, model, writer, epoch, local_rank, args, criterion,
 
             # -----------计算角度 MAE-----------
             M  = torch.sum(mask)                                  # 有效像素
-            m  = torch.sum(criterion(full_pred , gt )) / M
+            gt_n = (gt *2.0 -1.0) * mask
+            pred_n = (full_pred *2.0 -1.0) * mask
+            m  = torch.sum(criterion(pred_n , gt_n )) / M
             mae = torch.acos(m.clamp(-1 + 1e-6, 1 - 1e-6)) * 180 / pi
 
             total_loss   += mae.item()
