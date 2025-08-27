@@ -4,8 +4,6 @@ import UPIE
 import Unet
 import ResNet
 import DCC
-from SfPUEL import model_utils as mutil
-from SfPUEL import SfPUEL
 from torchvision.transforms.functional import affine
 from torchvision.utils import save_image
 from torch.nn.functional import normalize
@@ -39,7 +37,7 @@ def create_model_and_optimizer(args):
     训练时调用
     创建模型和优化器，返回(model, optimizer)。
     """
-    model = DeepSfP.Network()
+    model = U2Net.AttentionU2Net(12,3)
 
     # 将模型移动到指定设备（本地 GPU）
     # print(args.local_rank)
@@ -189,7 +187,7 @@ def train_sfp(train_loader, model, criterion, optimizer, epoch, writer, local_ra
         inputs.requires_grad_(True)
         inputs = inputs.cuda(local_rank, non_blocking=True)
 
-        outputs = model(inputs, images)
+        outputs, *_ = model(inputs)
 
         outputs = outputs * mask1
         outputs = normalize(outputs, dim=1)
@@ -258,7 +256,7 @@ def val_sfp_PlanB(val_loader, model, writer, epoch, local_rank, args, criterion,
 
                     patch = inputs[..., y:y+PATCH, x:x+PATCH]     # (1,C,256,256)
                     patch2 = image[..., y:y+PATCH, x:x+PATCH]
-                    pred, *_ = model(patch, patch2)                      # (1,3,256,256)  ← 改成你的输出
+                    pred, *_ = model(patch)                      # (1,3,256,256)  ← 改成你的输出
                     pred = pred * window                         # 加权
                     out_sum[..., y:y+PATCH, x:x+PATCH] += pred
                     w_sum[...,  y:y+PATCH, x:x+PATCH] += window

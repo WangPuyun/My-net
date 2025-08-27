@@ -58,7 +58,7 @@ def main_worker(local_rank, nprocs, args):
     model = model.cuda(args.local_rank)
 
     # 加载指定的checkpoint
-    checkpoint = torch.load('./pt/DeepSfP_best/818.pth')
+    checkpoint = torch.load('./pt/DeepSfP_best/90.pth')
     model.load_state_dict(checkpoint['model'])
 
     # 同步BN、防止多卡测试时因BN计算导致结果不一致
@@ -149,15 +149,15 @@ def main_worker(local_rank, nprocs, args):
                         cmap='jet',
                         vmin=0, vmax=theta_max)
             ax.axis('off')
-            ax.text(
-                0.02, 0.98, stats_text,
-                transform=ax.transAxes,
-                ha='left', va='top',
-                fontsize=12, fontweight='bold',
-                bbox=dict(boxstyle='round', facecolor='black', alpha=0.5, pad=0.4),
-                color='white',
-                zorder=10,
-            )
+            # ax.text(
+            #     0.02, 0.98, stats_text,
+            #     transform=ax.transAxes,
+            #     ha='left', va='top',
+            #     fontsize=12, fontweight='bold',
+            #     bbox=dict(boxstyle='round', facecolor='black', alpha=0.5, pad=0.4),
+            #     color='white',
+            #     zorder=10,
+            # )
             ax.set_title('Angular Error')
 
             cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
