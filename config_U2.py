@@ -23,7 +23,7 @@ def init_distributed(local_rank, nprocs, url='tcp://localhost:25484'):
     初始化分布式训练环境。
     """
     dist.init_process_group(
-        backend='nccl',  # 使用 nccl 后端
+        backend='gloo',  # 使用 nccl 后端
         init_method=url,  # 指定初始化通讯方式（ip+端口）
         world_size=nprocs,  # 总进程数
         rank=local_rank  # 当前进程 rank
@@ -37,7 +37,7 @@ def create_model_and_optimizer(args):
     训练时调用
     创建模型和优化器，返回(model, optimizer)。
     """
-    model = U2Net.AttentionU2Net(12,3)
+    model = DeepSfP.Network()
 
     # 将模型移动到指定设备（本地 GPU）
     # print(args.local_rank)
@@ -179,7 +179,6 @@ def train_sfp(train_loader, model, criterion, optimizer, epoch, writer, local_ra
         images = images.cuda(local_rank, non_blocking=True)
         ground_truths = sample['ground_truth']
         ground_truths = ground_truths.cuda(local_rank, non_blocking=True)
-        ground_truths = ground_truths/255.0
         mask = sample['mask']
         mask = mask.cuda(local_rank, non_blocking=True)  # False or True
         mask1 = torch.unsqueeze(mask, 1)
@@ -187,15 +186,12 @@ def train_sfp(train_loader, model, criterion, optimizer, epoch, writer, local_ra
         inputs.requires_grad_(True)
         inputs = inputs.cuda(local_rank, non_blocking=True)
 
-        outputs, *_ = model(inputs)
-
+        outputs, *_ = model(inputs,images)
         outputs = outputs * mask1
         outputs = normalize(outputs, dim=1)
         ground_truths = ground_truths * mask1
 
-        outputs_n = (outputs *2.0 -1.0) * mask1
-        ground_truths_n = (ground_truths *2.0 -1.0) * mask1
-        cosine = 1 - criterion(outputs_n, ground_truths_n)
+        cosine = 1 - criterion(outputs, ground_truths)
         num_cosine = torch.sum(torch.sum(torch.sum(cosine, dim=1), dim=1))
         M = torch.sum(torch.sum(torch.sum(mask, dim=1), dim=1))  # 物体像素
         back_ground = (train_loader.batch_size * 256 * 256) - M  # 背景像素
@@ -256,7 +252,7 @@ def val_sfp_PlanB(val_loader, model, writer, epoch, local_rank, args, criterion,
 
                     patch = inputs[..., y:y+PATCH, x:x+PATCH]     # (1,C,256,256)
                     patch2 = image[..., y:y+PATCH, x:x+PATCH]
-                    pred, *_ = model(patch)                      # (1,3,256,256)  ← 改成你的输出
+                    pred, *_ = model(patch, patch2)                      # (1,3,256,256)  ← 改成你的输出
                     pred = pred * window                         # 加权
                     out_sum[..., y:y+PATCH, x:x+PATCH] += pred
                     w_sum[...,  y:y+PATCH, x:x+PATCH] += window
@@ -268,9 +264,7 @@ def val_sfp_PlanB(val_loader, model, writer, epoch, local_rank, args, criterion,
 
             # -----------计算角度 MAE-----------
             M  = torch.sum(mask)                                  # 有效像素
-            gt_n = (gt *2.0 -1.0) * mask
-            pred_n = (full_pred *2.0 -1.0) * mask
-            m  = torch.sum(criterion(pred_n , gt_n )) / M
+            m  = torch.sum(criterion(full_pred , gt )) / M
             mae = torch.acos(m.clamp(-1 + 1e-6, 1 - 1e-6)) * 180 / pi
 
             total_loss   += mae.item()

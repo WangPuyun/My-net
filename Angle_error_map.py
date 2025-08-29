@@ -18,12 +18,13 @@ from Datasets_U2 import RandomMove, unfold_image, concat_image
 from torchvision.utils import save_image
 from AttentionU2Net import CAOutside
 from AttentionU2Net import U2Net_with_enhance_img
+from AttentionU2Net import U2Net
 from DeepSfP_Net import DeepSfP
 from TransUNet import TransUnet
 from utils_window import PATCH, OVERLAP, STRIDE, hann2d
 import cv2
 import matplotlib.pyplot as plt
-os.environ['CUDA_VISIBLE_DEVICES'] = '3,4,5'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 def parse_args():
     parser = argparse.ArgumentParser(description='PyTorch Network Testing')
@@ -31,10 +32,11 @@ def parse_args():
     parser.add_argument("--model_name", type=str, default=None,
                         help="加载已训练的模型文件路径，例如 'xxx.pth'")
     # 测试批次大小
-    parser.add_argument("--test_batch_size", type=int, default=3, help="测试批次大小")
+    parser.add_argument("--test_batch_size", type=int, default=1, help="测试批次大小")
     # # 测试数据所在的目录或其他参数 (视情况添加)
-    # parser.add_argument("--test_data_dir", type=str, default="./test_data",
-    #                     help="测试数据的路径")
+    parser.add_argument("--ckpt_path", type=str, default='./pt/798.pth', help="模型权重文件路径，例如 ./pt/100.pt")
+    parser.add_argument("--results_dir", type=str, default='./results_sfp_best', help="保存预测图的目录，例如 ./results_sfp_100")
+    parser.add_argument("--error_maps_dir", type=str, default='./error_maps_best', help="保存误差图的目录，例如 ./error_maps_100")
     # 其他必要的参数按需添加
     args = parser.parse_args()
     return args
@@ -54,12 +56,15 @@ def main_worker(local_rank, nprocs, args):
     config.init_distributed(local_rank=args.local_rank, nprocs=args.nprocs)
 
     # 构建模型与优化器（测试时通常无需使用optimizer，但此处为了演示可共用）
-    model = DeepSfP.Network()
+    model = U2Net.AttentionU2NetOutside()
     model = model.cuda(args.local_rank)
 
     # 加载指定的checkpoint
-    checkpoint = torch.load('./pt/DeepSfP_best/90.pth')
+    checkpoint = torch.load(args.ckpt_path)
     model.load_state_dict(checkpoint['model'])
+
+    os.makedirs(args.results_dir, exist_ok=True)
+    os.makedirs(args.error_maps_dir, exist_ok=True)
 
     # 同步BN、防止多卡测试时因BN计算导致结果不一致
     model = config.wrap_model_distributed(model, local_rank=local_rank)
@@ -131,7 +136,7 @@ def main_worker(local_rank, nprocs, args):
             total_loss   += mae.item()
             total_samples += 1
 
-            save_image(full_pred, './results_sfp/{}_{}.bmp'.format(filename[0], mae))
+            save_image(full_pred, f'{args.results_dir}/{filename[0]}_{mae:.4f}.bmp')
             
             # -----------新增误差映射图-----------
 
@@ -164,7 +169,7 @@ def main_worker(local_rank, nprocs, args):
             cbar.set_label('Error (°)')
 
             fig.tight_layout()
-            fig.savefig(f'./error_maps/{filename[0]}.png', dpi=300, bbox_inches='tight')
+            fig.savefig(f'{args.error_maps_dir}/{filename[0]}.png', dpi=300, bbox_inches='tight')
             plt.close(fig)
 
 
