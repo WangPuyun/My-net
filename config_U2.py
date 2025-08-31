@@ -15,6 +15,7 @@ from Datasets_U2 import MyDataset, RandomCrop, FixedCrop, RandomMove, unfold_ima
 from torch.utils.data import DataLoader
 from AttentionU2Net import U2Net
 from DeepSfP_Net import DeepSfP
+from TransUNet import TransUnet
 from math import pi
 import math
 from utils_window import PATCH, OVERLAP, STRIDE, hann2d
@@ -37,7 +38,7 @@ def create_model_and_optimizer(args):
     训练时调用
     创建模型和优化器，返回(model, optimizer)。
     """
-    model = DeepSfP.Network()
+    model = TransUnet()
 
     # 将模型移动到指定设备（本地 GPU）
     # print(args.local_rank)
@@ -83,14 +84,14 @@ def create_dataloaders(args):
     """
     # 训练集
     train_set = MyDataset(
-        csv_file='Underwater Dataset/train_list_withoutcleanwater.csv',
+        csv_file='Underwater Dataset/temp_list_withoutcleanwater.csv',
         root_dir='Underwater Dataset/Baseline_Data',
         transform=RandomCrop()  # RandomCrop 是数据增强
     )
 
     # 验证集
     val_set = MyDataset(
-        csv_file='Underwater Dataset/val_list_withoutcleanwater.csv',
+        csv_file='Underwater Dataset/temp_list_withoutcleanwater.csv',
         root_dir='Underwater Dataset/Baseline_Data',
         transform=False  
     )
@@ -186,7 +187,7 @@ def train_sfp(train_loader, model, criterion, optimizer, epoch, writer, local_ra
         inputs.requires_grad_(True)
         inputs = inputs.cuda(local_rank, non_blocking=True)
 
-        outputs, *_ = model(inputs,images)
+        outputs, *_ = model(inputs)
         outputs = outputs * mask1
         outputs = normalize(outputs, dim=1)
         ground_truths = ground_truths * mask1
@@ -252,7 +253,7 @@ def val_sfp_PlanB(val_loader, model, writer, epoch, local_rank, args, criterion,
 
                     patch = inputs[..., y:y+PATCH, x:x+PATCH]     # (1,C,256,256)
                     patch2 = image[..., y:y+PATCH, x:x+PATCH]
-                    pred, *_ = model(patch, patch2)                      # (1,3,256,256)  ← 改成你的输出
+                    pred, *_ = model(patch)                      # (1,3,256,256)  ← 改成你的输出
                     pred = pred * window                         # 加权
                     out_sum[..., y:y+PATCH, x:x+PATCH] += pred
                     w_sum[...,  y:y+PATCH, x:x+PATCH] += window

@@ -7,11 +7,11 @@ import numpy as np
 
 def get_model(args):
     if not hasattr(args, "channel"):
-        channel = 13
+        channel = 11
     else:
        channel =  args.channel
 
-    model = TransUnet(channel, 3, dim=args.dim, residual_num=args.residual_num, norm=args.norm, dropout=args.dropout, skip_res=True)
+    model = TransUnet(channel, 3, dim=64, residual_num=8, norm='in', dropout=0.0, skip_res=True)
     return model
 #%%
 if __name__ == "__main__":
