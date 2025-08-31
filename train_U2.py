@@ -9,13 +9,13 @@ from torch.backends import cudnn
 import torch.nn as nn
 from tqdm import tqdm
 import glob
-os.environ['CUDA_VISIBLE_DEVICES'] = '1,2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1,2,3,7'
 
 parser = argparse.ArgumentParser(description='PyTorch Network Training')
 parser.add_argument("--model_name", type=str, default=None, help="是否加载模型继续训练，重头开始训练 defaule=None, 继续训练defaule设置为'/**.pth'")
 parser.add_argument('--lr', type=float, default=0.001, help='学习率')
-parser.add_argument("--train_batch_size", type=int, default=2, help="分布训练批次大小")
-parser.add_argument("--val_batch_size", type=int, default=2, help="分布验证批次大小")
+parser.add_argument("--train_batch_size", type=int, default=16, help="分布训练批次大小")
+parser.add_argument("--val_batch_size", type=int, default=4, help="分布验证批次大小")
 parser.add_argument('--event_dir', default="./runs", help='tensorboard事件文件的地址')
 parser.add_argument("cos", action='store_true', help="use cos decay learning rate")
 parser.add_argument("--epochs", type=int, default=1000)

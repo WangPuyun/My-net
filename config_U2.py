@@ -84,14 +84,14 @@ def create_dataloaders(args):
     """
     # 训练集
     train_set = MyDataset(
-        csv_file='Underwater Dataset/temp_list_withoutcleanwater.csv',
+        csv_file='Underwater Dataset/train_list_withoutcleanwater.csv',
         root_dir='Underwater Dataset/Baseline_Data',
         transform=RandomCrop()  # RandomCrop 是数据增强
     )
 
     # 验证集
     val_set = MyDataset(
-        csv_file='Underwater Dataset/temp_list_withoutcleanwater.csv',
+        csv_file='Underwater Dataset/val_list_withoutcleanwater.csv',
         root_dir='Underwater Dataset/Baseline_Data',
         transform=False  
     )
