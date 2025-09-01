@@ -34,7 +34,7 @@ def parse_args():
     # 测试批次大小
     parser.add_argument("--test_batch_size", type=int, default=1, help="测试批次大小")
     # # 测试数据所在的目录或其他参数 (视情况添加)
-    parser.add_argument("--ckpt_path", type=str, default='./pt/798.pth', help="模型权重文件路径，例如 ./pt/100.pt")
+    parser.add_argument("--ckpt_path", type=str, default='./pt/100.pth', help="模型权重文件路径，例如 ./pt/100.pt")
     parser.add_argument("--results_dir", type=str, default='./results_sfp_best', help="保存预测图的目录，例如 ./results_sfp_100")
     parser.add_argument("--error_maps_dir", type=str, default='./error_maps_best', help="保存误差图的目录，例如 ./error_maps_100")
     # 其他必要的参数按需添加
@@ -56,7 +56,7 @@ def main_worker(local_rank, nprocs, args):
     config.init_distributed(local_rank=args.local_rank, nprocs=args.nprocs)
 
     # 构建模型与优化器（测试时通常无需使用optimizer，但此处为了演示可共用）
-    model = U2Net.AttentionU2NetOutside()
+    model = TransUnet()
     model = model.cuda(args.local_rank)
 
     # 加载指定的checkpoint
@@ -107,7 +107,7 @@ def main_worker(local_rank, nprocs, args):
                 for x in range(0, W - PATCH + 1, STRIDE):
                     patch = inputs[..., y:y+PATCH, x:x+PATCH]
                     patch2 = image[..., y:y+PATCH, x:x+PATCH]
-                    pred, *_ = model(patch, patch2)
+                    pred, *_ = model(patch)
                     pred = pred * window
                     out_sum[..., y:y+PATCH, x:x+PATCH] += pred
                     w_sum[...,  y:y+PATCH, x:x+PATCH] += window
