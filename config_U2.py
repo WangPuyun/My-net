@@ -19,12 +19,12 @@ from TransUNet import TransUnet
 from math import pi
 import math
 from utils_window import PATCH, OVERLAP, STRIDE, hann2d
-def init_distributed(local_rank, nprocs, url='tcp://localhost:25484'):
+def init_distributed(local_rank, nprocs, url='tcp://localhost:25464'):
     """
     初始化分布式训练环境。
     """
     dist.init_process_group(
-        backend='gloo',  # 使用 nccl 后端
+        backend='nccl',  # 使用 nccl 后端
         init_method=url,  # 指定初始化通讯方式（ip+端口）
         world_size=nprocs,  # 总进程数
         rank=local_rank  # 当前进程 rank
@@ -187,7 +187,7 @@ def train_sfp(train_loader, model, criterion, optimizer, epoch, writer, local_ra
         inputs.requires_grad_(True)
         inputs = inputs.cuda(local_rank, non_blocking=True)
 
-        outputs, *_ = model(inputs)
+        outputs = model(inputs)
         outputs = outputs * mask1
         outputs = normalize(outputs, dim=1)
         ground_truths = ground_truths * mask1
@@ -253,7 +253,7 @@ def val_sfp_PlanB(val_loader, model, writer, epoch, local_rank, args, criterion,
 
                     patch = inputs[..., y:y+PATCH, x:x+PATCH]     # (1,C,256,256)
                     patch2 = image[..., y:y+PATCH, x:x+PATCH]
-                    pred, *_ = model(patch)                      # (1,3,256,256)  ← 改成你的输出
+                    pred = model(patch)                      # (1,3,256,256)  ← 改成你的输出
                     pred = pred * window                         # 加权
                     out_sum[..., y:y+PATCH, x:x+PATCH] += pred
                     w_sum[...,  y:y+PATCH, x:x+PATCH] += window

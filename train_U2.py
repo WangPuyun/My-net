@@ -9,7 +9,7 @@ from torch.backends import cudnn
 import torch.nn as nn
 from tqdm import tqdm
 import glob
-os.environ['CUDA_VISIBLE_DEVICES'] = '1,2,3,7'
+os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,5,7'
 
 parser = argparse.ArgumentParser(description='PyTorch Network Training')
 parser.add_argument("--model_name", type=str, default=None, help="是否加载模型继续训练，重头开始训练 defaule=None, 继续训练defaule设置为'/**.pth'")

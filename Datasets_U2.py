@@ -63,8 +63,8 @@ class MyDataset(Dataset):
         input = torch.cat([input, viewing_encoding], dim=0)
 
         # Image Enhancement/Dehazing
-        # enhanced_images = torch.as_tensor(img_gt['enhanced_images'], dtype=torch.float32).permute(2, 0, 1)
-        # input = torch.cat([input, enhanced_images], dim=0)
+        enhanced_images = torch.as_tensor(img_gt['enhanced_images'], dtype=torch.float32).permute(2, 0, 1)
+        input = torch.cat([input, enhanced_images], dim=0)
         
         filename = self.image_gt.iloc[idx, 0].rstrip(".mat")
         sample = { 'input': input, 'ground_truth': ground_truth, 'mask': mask, 'CleanWater': CleanWater, 'mat_path': img_gt_file_path, 'P': img_gt['P'], 'filename':filename, 'image': image}
